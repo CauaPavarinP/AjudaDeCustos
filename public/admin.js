@@ -92,6 +92,13 @@ const n2 = v => (v || 0).toFixed(2).replace('.', ',');
 function abrirModal(html) { $('modal').innerHTML = `<div class="card modal">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
 function fecharModal() { $('modal').classList.add('hidden'); $('modal').innerHTML = ''; }
 $('modal').addEventListener('click', e => { if (e.target === $('modal')) fecharModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modal').classList.contains('hidden')) fecharModal(); });
+// Desabilita o botão enquanto a ação roda (evita cadastro duplicado com clique duplo)
+async function travando(botao, acao) {
+  if (botao.disabled) return;
+  botao.disabled = true;
+  try { await acao(); } finally { if (botao.isConnected) botao.disabled = false; }
+}
 
 // ======================= 01 · LANÇAMENTOS =======================
 function telaLancamentos() {
@@ -422,14 +429,14 @@ function modalColab(c) {
   user.addEventListener('input', () => { mexeuUser = true; });
   m.querySelector('#m-nome').addEventListener('input', e => { if (!mexeuUser) user.value = sugestao(e.target.value); });
   m.querySelector('#m-cancel').onclick = fecharModal;
-  m.querySelector('#m-ok').onclick = async () => {
+  m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
     const corpo = { nome: m.querySelector('#m-nome').value, usuario: user.value, funcao: m.querySelector('#m-func').value };
     try {
       const r = c ? await post('/api/admin/colaboradores/' + encodeURIComponent(c.id), corpo, 'PUT') : await post('/api/admin/colaboradores', corpo);
       await carregar(); telaColaboradores();
       if (r.senhaTemporaria) mostrarSenha(r); else fecharModal();
     } catch (e) { const el = m.querySelector('#m-erro'); el.textContent = e.message; el.classList.remove('hidden'); }
-  };
+  });
   m.querySelector('#m-nome').focus();
 }
 function mostrarSenha(r) {
@@ -445,10 +452,10 @@ function modalFuncao() {
     <div id="m-erro" class="alert hidden"></div>
     <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Adicionar</button></div>`);
   m.querySelector('#m-cancel').onclick = fecharModal;
-  m.querySelector('#m-ok').onclick = async () => {
+  m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
     try { await post('/api/admin/funcoes', { nome: m.querySelector('#m-nome').value }); await carregar(); fecharModal(); telaColaboradores(); }
     catch (e) { const el = m.querySelector('#m-erro'); el.textContent = e.message; el.classList.remove('hidden'); }
-  };
+  });
   m.querySelector('#m-nome').focus();
 }
 
@@ -479,7 +486,7 @@ $('v-login').addEventListener('submit', async e => {
     await mostrarPainel(await api('/api/admin/me'));
   } catch (err) { $('a-erro').textContent = err.message; $('a-erro').classList.remove('hidden'); }
 });
-$('b-sair').addEventListener('click', async () => { await fetch('/api/admin/logout', { method: 'POST' }); D = null; mostrarLogin(); });
+$('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} D = null; mostrarLogin(); });
 
 (async () => {
   try { await mostrarPainel(await api('/api/admin/me')); } catch { mostrarLogin(); }
