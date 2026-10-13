@@ -1,0 +1,21 @@
+{
+  "name": "ajuda-de-custo",
+  "version": "1.0.0",
+  "description": "Sistema de Ajuda de Custo - Comercial 101 do Brasil",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "express-session": "^1.19.0",
+    "google-auth-library": "^11.3.0",
+    "google-spreadsheet": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}
