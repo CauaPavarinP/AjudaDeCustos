@@ -3,104 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1d4ed8">
+  <meta name="theme-color" content="#2563eb">
   <title>Ajuda de Custo • 101 do Brasil</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main class="mobile">
-
-  <!-- 1. Login -->
-  <section id="v-login" class="view hidden">
-    <div class="brand">
-      <div class="logo">101</div>
-      <h1>Ajuda de Custo</h1>
-      <p class="muted" style="margin:0">Lance suas despesas de viagem de forma rápida.</p>
-    </div>
-    <form id="f-login" class="stack" style="margin-top:16px">
-      <div class="field">
-        <label for="l-func">Funcionário</label>
-        <select id="l-func" class="input" required><option value="">Selecione seu nome</option></select>
-      </div>
-      <div class="field">
-        <label for="l-cod">Código de acesso</label>
-        <input id="l-cod" class="input" type="password" inputmode="numeric" pattern="\d{4}" maxlength="4" autocomplete="one-time-code" placeholder="4 dígitos" required>
-      </div>
-      <div id="l-erro" class="alert hidden"></div>
-      <button class="btn big" type="submit">Entrar</button>
-    </form>
-    <div class="grow"></div>
-    <p class="muted small center">Não tem código? Fale com o Comercial.</p>
-  </section>
-
-  <!-- 2. Início -->
-  <section id="v-inicio" class="view hidden">
-    <div class="top">
-      <div class="grow"><h2 id="i-nome"></h2><p class="muted" id="i-funcao"></p></div>
-      <button class="iconbtn" id="b-sair" title="Sair" aria-label="Sair">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-      </button>
-    </div>
-    <div class="summary">
-      <span class="label" id="i-mes"></span>
-      <span>Total lançado no mês</span>
-      <span class="total" id="i-total">R$ 0,00</span>
-      <span class="sub" id="i-qtd"></span>
-    </div>
-    <button class="btn big" id="b-novo">+&nbsp; Novo lançamento</button>
-    <div class="section-title"><span>Lançamentos do mês</span></div>
-    <div class="list" id="i-lista"></div>
-  </section>
-
-  <!-- 3. Novo lançamento -->
-  <section id="v-novo" class="view hidden">
-    <div class="top">
-      <button class="iconbtn" id="b-voltar" aria-label="Voltar" style="color:var(--text)">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
-      </button>
-      <h2 style="font-size:18px">Novo lançamento</h2>
-    </div>
-    <form id="f-novo" class="stack grow">
-      <div class="field">
-        <label>Tipo de despesa</label>
-        <div class="chips" id="n-tipos"></div>
-      </div>
-      <div class="field">
-        <label for="n-data">Data</label>
-        <input id="n-data" class="input" type="date" required>
-      </div>
-      <div class="field">
-        <label for="n-valor">Valor</label>
-        <input id="n-valor" class="input" inputmode="numeric" placeholder="R$ 0,00" autocomplete="off" required>
-      </div>
-      <div class="field">
-        <label for="n-desc" id="n-desc-label">Descrição (opcional)</label>
-        <input id="n-desc" class="input" maxlength="200" placeholder="Ex.: Abastecimento – viagem Ribeirão Preto">
-      </div>
-      <div id="n-erro" class="alert hidden"></div>
-      <div class="grow"></div>
-      <button class="btn big" type="submit" id="b-enviar">Enviar lançamento</button>
-    </form>
-  </section>
-
-  <!-- 4. Enviado -->
-  <section id="v-ok" class="view hidden">
-    <div class="success">
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-    </div>
-    <div class="center">
-      <h2 style="margin:0 0 6px;font-size:22px">Lançamento enviado!</h2>
-      <p class="muted" style="margin:0">Ele já aparece no extrato do Comercial.</p>
-    </div>
-    <div class="card rows" id="ok-resumo"></div>
-    <div class="grow"></div>
-    <div class="stack" style="gap:10px">
-      <button class="btn big" id="b-ok-novo">Novo lançamento</button>
-      <button class="btn big secondary" id="b-ok-inicio">Voltar ao início</button>
-    </div>
-  </section>
-
-</main>
+<div class="phone">
+  <main id="screen" class="screen"></main>
+  <nav class="tabbar hidden" id="tabbar">
+    <button data-tab="inicio"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>Início</button>
+    <button data-tab="nova"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nova</button>
+    <button data-tab="perfil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Perfil</button>
+  </nav>
+</div>
 <script src="/app.js"></script>
 </body>
 </html>

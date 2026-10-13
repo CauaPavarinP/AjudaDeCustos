@@ -7,8 +7,21 @@ const { criarStore, novoId, paraNumero } = require('./services/store');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
-const TIPOS = ['Combustível', 'Alimentação', 'Hospedagem', 'Pedágio', 'Estacionamento', 'Outros'];
+const ADMIN_NOME = process.env.ADMIN_NOME || 'Maurício';
+
+// Categorias de gasto (iguais às colunas da planilha "Resumo prestação de contas")
+const CATEGORIAS = [
+  { chave: 'combustivel', nome: 'Combustível' },
+  { chave: 'alimentacao', nome: 'Alimentação' },
+  { chave: 'degustacao', nome: 'Degustação' },
+  { chave: 'hotel', nome: 'Hotel' },
+  { chave: 'transporte', nome: 'Transporte' },
+  { chave: 'outros', nome: 'Outros' },
+];
+const NOMES_CAT = CATEGORIAS.map(c => c.nome);
+const FUNCOES_INICIAIS = ['Vendedor', 'Promotora'];
 const VALOR_MAXIMO = 50000;
+const STATUS = { analise: 'Em análise', aprovada: 'Aprovada', recusada: 'Recusada' };
 
 for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   if (!process.env[v]) {
@@ -19,8 +32,8 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
 
 const store = criarStore(process.env);
 const app = express();
-app.set('trust proxy', 1); // Render fica atrás de proxy (necessário para cookie "secure")
-app.use(express.json({ limit: '20kb' }));
+app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
+app.use(express.json({ limit: '30kb' }));
 app.use(session({
   name: 'ajudacusto.sid',
   secret: process.env.SESSION_SECRET || 'dev-secret-troque',
@@ -30,224 +43,253 @@ app.use(session({
 }));
 
 // ---------------- utilitários ----------------
-function hojeSP() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-}
-const dataValida = s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
+const hojeSP = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const dataValida = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
+const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
 const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-const soDigitos = v => String(v ?? '').replace(/\D/g, '');
+const r2 = n => Math.round(n * 100) / 100;
+const valor = v => r2(paraNumero(v));
 const iguais = (a, b) => {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
-const ordenar = arr => arr.sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
-const publicoFunc = f => ({ id: f.id, nome: f.nome, funcao: f.funcao, telefone: f.telefone, codigo: f.codigo, ativo: f.ativo, criadoEm: f.criadoEm });
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const erro = (res, msg, status = 400) => res.status(status).json({ erro: msg });
 
-// Bloqueio simples contra tentativa de adivinhar código/senha
+function hashSenha(senha) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return salt + ':' + crypto.scryptSync(String(senha), salt, 32).toString('hex');
+}
+function confereSenha(senha, guardado) {
+  const [salt, h] = String(guardado || '').split(':');
+  if (!salt || !h) return false;
+  const x = crypto.scryptSync(String(senha), salt, 32), y = Buffer.from(h, 'hex');
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+function senhaTemporaria() {
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
+}
+const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
+
+// Bloqueio simples contra tentativas de adivinhar senha
 const tentativas = new Map();
 const LIMITE = 5, BLOQUEIO_MS = 10 * 60 * 1000;
-function bloqueado(chave) {
-  const t = tentativas.get(chave);
-  return t && t.ate && t.ate > Date.now();
-}
-function falhou(chave) {
-  const t = tentativas.get(chave) || { n: 0 };
+const bloqueado = k => { const t = tentativas.get(k); return t && t.ate > Date.now(); };
+function falhou(k) {
+  const t = tentativas.get(k) || { n: 0 };
   t.n += 1;
   if (t.n >= LIMITE) { t.ate = Date.now() + BLOQUEIO_MS; t.n = 0; }
-  tentativas.set(chave, t);
+  tentativas.set(k, t);
 }
-const sucesso = chave => tentativas.delete(chave);
+const sucesso = k => tentativas.delete(k);
 
-async function gerarCodigo() {
-  const usados = new Set((await store.listFuncionarios()).filter(f => f.ativo).map(f => f.codigo));
-  for (let i = 0; i < 200; i++) {
-    const c = String(crypto.randomInt(0, 10000)).padStart(4, '0');
-    if (!usados.has(c)) return c;
-  }
-  throw new Error('Não foi possível gerar um código livre.');
+function entrar(req, res, campos) {
+  req.session.regenerate(err => {
+    if (err) return erro(res, 'Erro ao iniciar sessão.', 500);
+    Object.assign(req.session, campos);
+    res.json({ ok: true });
+  });
 }
 
 // ---------------- autenticação ----------------
-const exigeFuncionario = wrap(async (req, res, next) => {
-  const id = req.session.funcionarioId;
-  if (!id) return res.status(401).json({ erro: 'Faça login.' });
-  const f = (await store.listFuncionarios()).find(x => x.id === id);
-  if (!f || !f.ativo) { req.session.funcionarioId = null; return res.status(401).json({ erro: 'Acesso desativado.' }); }
-  req.funcionario = f;
+const exigeColab = wrap(async (req, res, next) => {
+  const id = req.session.colaboradorId;
+  if (!id) return erro(res, 'Faça login.', 401);
+  const c = (await store.list('Colaboradores')).find(x => x.id === id);
+  if (!c || !c.ativo) { req.session.colaboradorId = null; return erro(res, 'Acesso desativado.', 401); }
+  req.colab = c;
   next();
 });
-const exigeAdmin = (req, res, next) => (req.session.admin ? next() : res.status(401).json({ erro: 'Faça login.' }));
+const exigeAdmin = (req, res, next) => (req.session.admin ? next() : erro(res, 'Faça login.', 401));
 
-// ---------------- rotas públicas ----------------
+// ---------------- público ----------------
 app.get('/health', (req, res) => res.json({ ok: true, armazenamento: store.modo }));
-app.get('/api/tipos', (req, res) => res.json(TIPOS));
+app.get('/api/categorias', (req, res) => res.json(CATEGORIAS));
 
-// Lista para o login do colaborador: só nome e id dos ativos
-app.get('/api/funcionarios-login', wrap(async (req, res) => {
-  const lista = (await store.listFuncionarios()).filter(f => f.ativo)
-    .map(f => ({ id: f.id, nome: f.nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+// ================= COLABORADOR (celular) =================
+app.post('/api/login', wrap(async (req, res) => {
+  const usuario = texto(req.body.usuario, 40).toLowerCase();
+  const chave = 'c:' + req.ip + ':' + usuario;
+  if (bloqueado(chave)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
+  const c = (await store.list('Colaboradores')).find(x => x.usuario === usuario && x.ativo);
+  if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  sucesso(chave);
+  entrar(req, res, { colaboradorId: c.id });
+}));
+app.post('/api/logout', (req, res) => { req.session.colaboradorId = null; res.json({ ok: true }); });
+
+app.get('/api/me', exigeColab, (req, res) => res.json(publicoColab(req.colab)));
+
+app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
+  const nova = String(req.body.nova ?? '');
+  if (!confereSenha(req.body.atual, req.colab.senhaHash)) return erro(res, 'A senha atual não confere.');
+  if (nova.length < 6) return erro(res, 'A nova senha precisa ter pelo menos 6 caracteres.');
+  await store.update('Colaboradores', req.colab.id, { senhaHash: hashSenha(nova) });
+  res.json({ ok: true });
+}));
+
+app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
+  const lista = (await store.list('Despesas')).filter(d => d.colaboradorId === req.colab.id)
+    .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
   res.json(lista);
 }));
 
-app.post('/api/login', wrap(async (req, res) => {
-  const id = texto(req.body.funcionarioId, 40);
-  const codigo = soDigitos(req.body.codigo);
-  const chave = 'f:' + req.ip + ':' + id;
-  if (bloqueado(chave)) return res.status(429).json({ erro: 'Muitas tentativas. Aguarde 10 minutos.' });
-  const f = (await store.listFuncionarios()).find(x => x.id === id && x.ativo);
-  if (!f || !iguais(f.codigo, codigo)) { falhou(chave); return res.status(401).json({ erro: 'Nome ou código incorreto.' }); }
-  sucesso(chave);
-  req.session.regenerate(err => {
-    if (err) return res.status(500).json({ erro: 'Erro ao iniciar sessão.' });
-    req.session.funcionarioId = f.id;
-    res.json({ ok: true });
-  });
-}));
-
-app.post('/api/logout', (req, res) => { req.session.funcionarioId = null; res.json({ ok: true }); });
-
-// ---------------- colaborador ----------------
-app.get('/api/me', exigeFuncionario, (req, res) => {
-  res.json({ id: req.funcionario.id, nome: req.funcionario.nome, funcao: req.funcionario.funcao });
-});
-
-app.get('/api/meus-lancamentos', exigeFuncionario, wrap(async (req, res) => {
-  const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : hojeSP().slice(0, 7);
-  const lista = ordenar((await store.listLancamentos())
-    .filter(l => l.funcionarioId === req.funcionario.id && l.data.startsWith(mes)));
-  const total = Math.round(lista.reduce((s, l) => s + l.valor, 0) * 100) / 100;
-  res.json({ mes, total, quantidade: lista.length, lancamentos: lista });
-}));
-
-app.post('/api/lancamentos', exigeFuncionario, wrap(async (req, res) => {
+app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const data = texto(req.body.data, 10);
-  const tipo = texto(req.body.tipo, 40);
-  const valor = Math.round(paraNumero(req.body.valor) * 100) / 100;
-  const descricao = texto(req.body.descricao, 200);
-  if (!dataValida(data)) return res.status(400).json({ erro: 'Data inválida.' });
-  if (data > hojeSP()) return res.status(400).json({ erro: 'A data não pode ser no futuro.' });
-  if (!TIPOS.includes(tipo)) return res.status(400).json({ erro: 'Escolha o tipo de despesa.' });
-  if (!(valor > 0)) return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
-  if (valor > VALOR_MAXIMO) return res.status(400).json({ erro: 'Valor muito alto. Confira o que foi digitado.' });
-  if (tipo === 'Outros' && !descricao) return res.status(400).json({ erro: 'Para "Outros", descreva a despesa.' });
-  const l = {
-    id: novoId(), data, tipo, valor, descricao,
-    funcionarioId: req.funcionario.id, funcionario: req.funcionario.nome, funcao: req.funcionario.funcao,
-    criadoEm: new Date().toISOString(),
+  const categoria = texto(req.body.categoria, 30);
+  const v = valor(req.body.valor);
+  const observacao = texto(req.body.observacao, 200);
+  if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
+  if (!(v > 0)) return erro(res, 'Informe o valor da nota.');
+  if (v > VALOR_MAXIMO) return erro(res, 'Valor muito alto. Confira o que foi digitado.');
+  if (!dataValida(data)) return erro(res, 'Data inválida.');
+  if (data > hojeSP()) return erro(res, 'A data não pode ser no futuro.');
+  if (categoria === 'Outros' && !observacao) return erro(res, 'Para "Outros", escreva uma observação.');
+  const d = {
+    id: novoId(), colaboradorId: req.colab.id, colaborador: req.colab.nome, funcao: req.colab.funcao,
+    data, categoria, valor: v, observacao, status: STATUS.analise,
+    criadoEm: new Date().toISOString(), avaliadoEm: '', avaliadoPor: '',
   };
-  await store.addLancamento(l);
-  res.status(201).json(l);
+  await store.add('Despesas', d);
+  res.status(201).json(d);
 }));
 
-// ---------------- administrador (Maurício) ----------------
+app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
+  const d = (await store.list('Despesas')).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
+  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
+  await store.remove('Despesas', d.id);
+  res.json({ ok: true });
+}));
+
+// ================= ADMINISTRADOR (Maurício) =================
 app.post('/api/admin/login', (req, res) => {
   const chave = 'a:' + req.ip;
-  if (bloqueado(chave)) return res.status(429).json({ erro: 'Muitas tentativas. Aguarde 10 minutos.' });
+  if (bloqueado(chave)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
   const ok = iguais(texto(req.body.usuario, 100), process.env.ADMIN_USER || 'admin')
     && iguais(String(req.body.senha ?? ''), process.env.ADMIN_PASSWORD || 'admin');
-  if (!ok) { falhou(chave); return res.status(401).json({ erro: 'Usuário ou senha incorretos.' }); }
+  if (!ok) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave);
-  req.session.regenerate(err => {
-    if (err) return res.status(500).json({ erro: 'Erro ao iniciar sessão.' });
-    req.session.admin = true;
-    res.json({ ok: true });
-  });
+  entrar(req, res, { admin: true });
 });
 app.post('/api/admin/logout', (req, res) => { req.session.admin = false; res.json({ ok: true }); });
-app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ ok: true }));
+app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }));
 
-app.get('/api/admin/funcionarios', exigeAdmin, wrap(async (req, res) => {
-  const lista = (await store.listFuncionarios()).map(publicoFunc)
-    .sort((a, b) => (b.ativo - a.ativo) || a.nome.localeCompare(b.nome, 'pt-BR'));
-  res.json(lista);
+// Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
+app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
+  const [colaboradores, funcoes, prestacoes, despesas] = await Promise.all(
+    ['Colaboradores', 'Funcoes', 'Prestacoes', 'Despesas'].map(t => store.list(t)));
+  res.json({
+    categorias: CATEGORIAS,
+    funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    colaboradores: colaboradores.map(publicoColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+    prestacoes, despesas,
+  });
 }));
 
-function validarFuncionario(body) {
+// ---- funções ----
+app.post('/api/admin/funcoes', exigeAdmin, wrap(async (req, res) => {
+  const nome = texto(req.body.nome, 40);
+  if (nome.length < 2) return erro(res, 'Informe o nome da função.');
+  const existe = (await store.list('Funcoes')).some(f => f.nome.toLowerCase() === nome.toLowerCase());
+  if (existe) return erro(res, 'Essa função já existe.');
+  await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
+  res.status(201).json({ ok: true });
+}));
+
+// ---- colaboradores ----
+async function validarColab(body, idAtual) {
   const nome = texto(body.nome, 80);
-  const funcao = texto(body.funcao, 60);
-  const telefone = texto(body.telefone, 30);
+  const usuario = texto(body.usuario, 30).toLowerCase();
+  const funcao = texto(body.funcao, 40);
   if (nome.length < 2) return { erro: 'Informe o nome.' };
-  if (funcao.length < 2) return { erro: 'Informe a função.' };
-  return { nome, funcao, telefone };
+  if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
+  const funcoes = (await store.list('Funcoes')).map(f => f.nome);
+  if (!funcoes.includes(funcao)) return { erro: 'Escolha uma função cadastrada.' };
+  const todos = await store.list('Colaboradores');
+  if (todos.some(c => c.usuario === usuario && c.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
+  return { nome, usuario, funcao };
 }
 
-app.post('/api/admin/funcionarios', exigeAdmin, wrap(async (req, res) => {
-  const v = validarFuncionario(req.body);
-  if (v.erro) return res.status(400).json(v);
-  const todos = await store.listFuncionarios();
-  if (todos.some(f => f.ativo && f.nome.toLowerCase() === v.nome.toLowerCase())) {
-    return res.status(400).json({ erro: 'Já existe um funcionário ativo com esse nome.' });
-  }
-  const f = { id: novoId(), ...v, codigo: await gerarCodigo(), ativo: true, criadoEm: new Date().toISOString() };
-  await store.addFuncionario(f);
-  res.status(201).json(publicoFunc(f));
+app.post('/api/admin/colaboradores', exigeAdmin, wrap(async (req, res) => {
+  const v = await validarColab(req.body);
+  if (v.erro) return erro(res, v.erro);
+  const senha = senhaTemporaria();
+  const c = { id: novoId(), ...v, ativo: true, senhaHash: hashSenha(senha), criadoEm: new Date().toISOString() };
+  await store.add('Colaboradores', c);
+  res.status(201).json({ ...publicoColab(c), senhaTemporaria: senha });
 }));
 
-app.put('/api/admin/funcionarios/:id', exigeAdmin, wrap(async (req, res) => {
+app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
+  const id = String(req.params.id);
   const campos = {};
-  if ('nome' in req.body || 'funcao' in req.body || 'telefone' in req.body) {
-    const v = validarFuncionario(req.body);
-    if (v.erro) return res.status(400).json(v);
+  if ('nome' in req.body) {
+    const v = await validarColab(req.body, id);
+    if (v.erro) return erro(res, v.erro);
     Object.assign(campos, v);
   }
   if ('ativo' in req.body) campos.ativo = !!req.body.ativo;
-  if (req.body.novoCodigo) campos.codigo = await gerarCodigo();
-  const f = await store.updateFuncionario(String(req.params.id), campos);
-  if (!f) return res.status(404).json({ erro: 'Funcionário não encontrado.' });
-  res.json(publicoFunc(f));
+  let senha;
+  if (req.body.novaSenha) { senha = senhaTemporaria(); campos.senhaHash = hashSenha(senha); }
+  const c = await store.update('Colaboradores', id, campos);
+  if (!c) return erro(res, 'Colaborador não encontrado.', 404);
+  res.json({ ...publicoColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
 }));
 
-async function filtrarExtrato(q) {
-  const inicio = dataValida(q.inicio || '') ? q.inicio : hojeSP().slice(0, 8) + '01';
-  const fim = dataValida(q.fim || '') ? q.fim : hojeSP();
-  const funcao = texto(q.funcao, 60);
-  const funcionarioId = texto(q.funcionarioId, 40);
-  const tipo = texto(q.tipo, 40);
-  const lista = ordenar((await store.listLancamentos()).filter(l =>
-    l.data >= inicio && l.data <= fim
-    && (!funcao || l.funcao === funcao)
-    && (!funcionarioId || l.funcionarioId === funcionarioId)
-    && (!tipo || l.tipo === tipo)));
-  return { inicio, fim, lista };
+// ---- prestações (lançadas pelo Maurício) ----
+async function validarPrestacao(body) {
+  const colab = (await store.list('Colaboradores')).find(c => c.id === String(body.colaboradorId || ''));
+  if (!colab) return { erro: 'Escolha o colaborador.' };
+  const dataInicial = texto(body.dataInicial, 10), dataFinal = texto(body.dataFinal, 10), mesRef = texto(body.mesRef, 7);
+  if (!dataValida(dataInicial) || !dataValida(dataFinal)) return { erro: 'Informe a data inicial e a data final.' };
+  if (dataFinal < dataInicial) return { erro: 'A data final não pode ser antes da inicial.' };
+  if (!mesValido(mesRef)) return { erro: 'Escolha o mês de referência.' };
+  const p = { colaboradorId: colab.id, colaborador: colab.nome, funcao: colab.funcao, dataInicial, dataFinal, mesRef };
+  let total = 0;
+  for (const c of CATEGORIAS) {
+    const v = valor(body[c.chave]);
+    if (v < 0 || v > VALOR_MAXIMO) return { erro: `Valor inválido em ${c.nome}.` };
+    p[c.chave] = v; total += v;
+  }
+  if (!(total > 0)) return { erro: 'Preencha pelo menos um valor.' };
+  p.total = r2(total);
+  p.observacao = texto(body.observacao, 300);
+  return p;
 }
 
-app.get('/api/admin/extrato', exigeAdmin, wrap(async (req, res) => {
-  const { inicio, fim, lista } = await filtrarExtrato(req.query);
-  const r2 = n => Math.round(n * 100) / 100;
-  const total = r2(lista.reduce((s, l) => s + l.valor, 0));
-  const agrupar = chave => {
-    const m = new Map();
-    for (const l of lista) {
-      const k = chave(l);
-      const g = m.get(k.id) || { ...k, total: 0, quantidade: 0 };
-      g.total = r2(g.total + l.valor); g.quantidade += 1;
-      m.set(k.id, g);
-    }
-    return [...m.values()].sort((a, b) => b.total - a.total);
-  };
-  const porFuncionario = agrupar(l => ({ id: l.funcionarioId, nome: l.funcionario }));
-  const porTipo = agrupar(l => ({ id: l.tipo, nome: l.tipo }));
-  const funcoes = [...new Set((await store.listFuncionarios()).map(f => f.funcao).filter(Boolean))].sort();
-  res.json({ inicio, fim, total, quantidade: lista.length, porFuncionario, porTipo, funcoes, lancamentos: lista });
+app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
+  const p = await validarPrestacao(req.body);
+  if (p.erro) return erro(res, p.erro);
+  const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString() };
+  await store.add('Prestacoes', nova);
+  res.status(201).json(nova);
+}));
+app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
+  const p = await validarPrestacao(req.body);
+  if (p.erro) return erro(res, p.erro);
+  const atual = await store.update('Prestacoes', String(req.params.id), p);
+  if (!atual) return erro(res, 'Prestação não encontrada.', 404);
+  res.json(atual);
+}));
+app.delete('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
+  const ok = await store.remove('Prestacoes', String(req.params.id));
+  if (!ok) return erro(res, 'Prestação não encontrada.', 404);
+  res.json({ ok: true });
 }));
 
-// Exporta CSV (abre no Excel). ";" e BOM para acentos e separador corretos no Excel em português.
-app.get('/api/admin/extrato.csv', exigeAdmin, wrap(async (req, res) => {
-  const { inicio, fim, lista } = await filtrarExtrato(req.query);
-  const cel = v => {
-    let s = String(v ?? '');
-    if (/^[=+\-@]/.test(s)) s = "'" + s; // evita fórmula ao abrir no Excel
-    return '"' + s.replace(/"/g, '""') + '"';
-  };
-  const br = d => d.split('-').reverse().join('/');
-  const linhas = [['Data', 'Funcionário', 'Função', 'Tipo', 'Descrição', 'Valor'].map(cel).join(';')];
-  for (const l of lista) linhas.push([br(l.data), l.funcionario, l.funcao, l.tipo, l.descricao, l.valor.toFixed(2).replace('.', ',')].map(cel).join(';'));
-  const total = lista.reduce((s, l) => s + l.valor, 0);
-  linhas.push(['', '', '', '', 'TOTAL', total.toFixed(2).replace('.', ',')].map(cel).join(';'));
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="extrato-${inicio}-a-${fim}.csv"`);
-  res.send('﻿' + linhas.join('\r\n'));
+// ---- aprovação das despesas do celular ----
+app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
+  const acao = req.params.acao;
+  if (!['aprovar', 'recusar', 'reabrir'].includes(acao)) return erro(res, 'Ação inválida.', 404);
+  const status = acao === 'aprovar' ? STATUS.aprovada : acao === 'recusar' ? STATUS.recusada : STATUS.analise;
+  const d = await store.update('Despesas', String(req.params.id), {
+    status,
+    avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
+    avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
+  });
+  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  res.json(d);
 }));
 
 // ---------------- páginas ----------------
@@ -259,6 +301,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ erro: 'Erro interno. Tente novamente.' });
 });
 
-store.init()
-  .then(() => app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo})`)))
-  .catch(err => { console.error('Falha ao iniciar:', err.message); process.exit(1); });
+async function iniciar() {
+  await store.init();
+  // Cria as funções iniciais na primeira vez
+  if (!(await store.list('Funcoes')).length) {
+    for (const nome of FUNCOES_INICIAIS) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
+  }
+  app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo})`));
+}
+iniciar().catch(err => { console.error('Falha ao iniciar:', err.message); process.exit(1); });
