@@ -47,7 +47,8 @@ app.use((req, res, next) => {
 });
 // Corpo das requisições: 30 KB, exceto nas rotas que recebem a foto da nota (já comprimida no celular)
 const jsonPequeno = express.json({ limit: '30kb' }), jsonComFoto = express.json({ limit: '5mb' });
-const rotaComFoto = req => /^\/api\/despesas(\/[^/]+\/foto)?$/.test(req.path) && req.method !== 'GET';
+const rotaComFoto = req => req.method !== 'GET'
+  && (/^\/api\/despesas(\/[^/]+\/foto)?$/.test(req.path) || /^\/api\/admin\/prestacoes\/[^/]+\/fotos$/.test(req.path));
 app.use((req, res, next) => (rotaComFoto(req) ? jsonComFoto : jsonPequeno)(req, res, next));
 app.use((req, res, next) => { if (!req.body || typeof req.body !== 'object') req.body = {}; next(); });
 
@@ -86,7 +87,9 @@ app.use((req, res, next) => { req.sessao = lerSessao(req); next(); });
 
 // ---------------- utilitários ----------------
 const hojeSP = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
-const dataValida = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
+// Data AAAA-MM-DD existente e com ano razoável (evita erros de digitação como 07/07/7777)
+const dataValida = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z'))
+  && Number(s.slice(0, 4)) >= 2000 && Number(s.slice(0, 4)) <= new Date().getFullYear() + 1;
 const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
 const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const r2 = n => Math.round(n * 100) / 100;
@@ -113,6 +116,10 @@ function senhaTemporaria() {
   return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
 }
 const publicoDesp = d => ({ ...d, foto: !!d.foto });
+// Comprovantes da prestação: várias fotos, guardadas como referências separadas por "|" na coluna Fotos
+const MAX_FOTOS_PREST = 10;
+const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
+const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length });
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
 
 // Bloqueio simples contra tentativas de adivinhar senha
@@ -165,11 +172,11 @@ async function guardarFoto(id, dataUrl) {
   catch (e) { console.error('[fotos]', e.message); return { erro: 'Não foi possível enviar a foto. Tente de novo ou envie sem foto.' }; }
 }
 const apagarFoto = ref => { if (fotos && ref) fotos.apagar(ref).catch(e => console.error('[fotos] apagar', e.message)); };
-async function enviarFoto(res, d) {
-  if (!d || !d.foto) return erro(res, 'Esta despesa não tem foto.', 404);
+const enviarFoto = (res, d) => (d && d.foto ? enviarFotoRef(res, d.foto) : erro(res, 'Esta despesa não tem foto.', 404));
+async function enviarFotoRef(res, ref) {
   if (!fotos) return erro(res, 'Fotos indisponíveis no momento.', 503);
   try {
-    const buf = await fotos.ler(d.foto);
+    const buf = await fotos.ler(ref);
     res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600' }).send(buf);
   } catch (e) { console.error('[fotos] ler', e.message); erro(res, 'Não foi possível carregar a foto.', 502); }
 }
@@ -284,7 +291,7 @@ app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
     categorias: CATEGORIAS,
     funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
     colaboradores: colaboradores.map(publicoColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
-    prestacoes, despesas: despesas.map(publicoDesp),
+    prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp),
     fotos: !!fotos,
   });
 }));
@@ -387,21 +394,52 @@ async function validarPrestacao(body) {
 app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
   const p = await validarPrestacao(req.body);
   if (p.erro) return erro(res, p.erro);
-  const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString() };
+  const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
   await store.add('Prestacoes', nova);
-  res.status(201).json(nova);
+  res.status(201).json(publicoPrest(nova));
 }));
 app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
   const p = await validarPrestacao(req.body);
   if (p.erro) return erro(res, p.erro);
   const atual = await store.update('Prestacoes', String(req.params.id), p);
   if (!atual) return erro(res, 'Prestação não encontrada.', 404);
-  res.json(atual);
+  res.json(publicoPrest(atual));
 }));
 app.delete('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
-  const ok = await store.remove('Prestacoes', String(req.params.id));
-  if (!ok) return erro(res, 'Prestação não encontrada.', 404);
+  const p = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
+  if (!p) return erro(res, 'Prestação não encontrada.', 404);
+  await store.remove('Prestacoes', p.id);
+  refsPrest(p).forEach(apagarFoto);
   res.json({ ok: true });
+}));
+
+// ---- comprovantes da prestação (fotos anexadas pelo Maurício) ----
+const acharPrest = async id => (await store.list('Prestacoes')).find(x => x.id === String(id));
+app.post('/api/admin/prestacoes/:id/fotos', exigeAdmin, wrap(async (req, res) => {
+  const p = await acharPrest(req.params.id);
+  if (!p) return erro(res, 'Prestação não encontrada.', 404);
+  if (refsPrest(p).length >= MAX_FOTOS_PREST) return erro(res, `Cada prestação aceita até ${MAX_FOTOS_PREST} fotos.`);
+  const f = await guardarFoto('prest-' + p.id, req.body.foto);
+  if (f.erro) return erro(res, f.erro);
+  // lê de novo logo antes de gravar, para não perder uma foto enviada ao mesmo tempo
+  const agora = await acharPrest(p.id);
+  if (!agora) { apagarFoto(f.ref); return erro(res, 'Prestação não encontrada.', 404); }
+  const atual = await store.update('Prestacoes', p.id, { fotos: [...refsPrest(agora), f.ref].join('|') });
+  res.status(201).json(publicoPrest(atual));
+}));
+app.get('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
+  const ref = refsPrest(await acharPrest(req.params.id))[Number(req.params.n)];
+  if (!ref) return erro(res, 'Foto não encontrada.', 404);
+  enviarFotoRef(res, ref);
+}));
+app.delete('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
+  const p = await acharPrest(req.params.id);
+  const refs = refsPrest(p), n = Number(req.params.n);
+  if (!refs[n]) return erro(res, 'Foto não encontrada.', 404);
+  const [removida] = refs.splice(n, 1);
+  const atual = await store.update('Prestacoes', p.id, { fotos: refs.join('|') });
+  apagarFoto(removida);
+  res.json(publicoPrest(atual));
 }));
 
 // ---- aprovação das despesas do celular ----

@@ -182,3 +182,34 @@ test('colaborador desativado perde o acesso na hora', async () => {
   await a.put('/api/admin/colaboradores/' + id, { ativo: false });
   assert.equal((await c.get('/api/me')).status, 401);
 });
+
+test('prestação: comprovantes (anexar, ver, remover, limite) e data com ano inválido', async () => {
+  const a = await adminLogado();
+  const { id: colaboradorId } = await novoColaborador(a);
+  const base = { colaboradorId, dataInicial: ontem(), dataFinal: ontem(), mesRef: ontem().slice(0, 7), hotel: 100 };
+  // ano absurdo (ex.: 07/07/7777) é recusado
+  assert.equal((await a.post('/api/admin/prestacoes', { ...base, dataInicial: '7777-07-07', dataFinal: '7777-07-07', mesRef: '7777-07' })).status, 400);
+
+  const p = (await a.post('/api/admin/prestacoes', base)).dados;
+  assert.equal(p.fotos, 0);
+  assert.equal((await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: fotoFake() })).dados.fotos, 1);
+  assert.equal((await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: fotoFake() })).dados.fotos, 2);
+  assert.equal((await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: 'data:image/png;base64,AAAA' })).status, 400);
+
+  const f = await a.get(`/api/admin/prestacoes/${p.id}/fotos/1`);
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('content-type'), 'image/jpeg');
+  assert.equal((await a.get(`/api/admin/prestacoes/${p.id}/fotos/5`)).status, 404);
+  assert.equal((await cliente().get(`/api/admin/prestacoes/${p.id}/fotos/0`)).status, 401);
+
+  // editar a prestação não perde as fotos
+  assert.equal((await a.put('/api/admin/prestacoes/' + p.id, { ...base, hotel: 150 })).dados.fotos, 2);
+  // remover uma
+  assert.equal((await a.del(`/api/admin/prestacoes/${p.id}/fotos/0`)).dados.fotos, 1);
+  // limite de 10
+  for (let i = 0; i < 9; i++) await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: fotoFake() });
+  assert.equal((await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: fotoFake() })).status, 400);
+  // excluir a prestação
+  assert.equal((await a.del('/api/admin/prestacoes/' + p.id)).status, 200);
+  assert.equal((await a.get(`/api/admin/prestacoes/${p.id}/fotos/0`)).status, 404);
+});

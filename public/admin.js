@@ -153,7 +153,7 @@ function telaLancamentos() {
       <thead><tr><th>Colaborador</th><th>Função</th><th>Período</th><th>Mês</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th class="num">Total</th></tr></thead>
       <tbody>
         ${rows.map(r => `<tr class="click" data-row="${esc(r.id)}">
-          <td class="b">${esc(r.colaborador)}${r.origem === 'app' ? '<span class="tag-app">APP</span>' : ''}</td><td>${esc(r.funcao)}</td>
+          <td class="b">${esc(r.colaborador)}${r.origem === 'app' ? '<span class="tag-app">APP</span>' : ''}${r.fotos ? `<span class="tag-foto" title="${r.fotos} comprovante(s)">📎${r.fotos}</span>` : ''}</td><td>${esc(r.funcao)}</td>
           <td class="num" style="text-align:left">${dm(r.dataInicial)} a ${dmy(r.dataFinal)}</td><td>${r.mesRef.slice(5)}</td>
           ${CAT.map(c => `<td class="num${r.valores[c.chave] ? '' : ' dim'}">${cel(r.valores[c.chave])}</td>`).join('')}
           <td class="num b">${fmt(r.total)}</td></tr>`).join('')}
@@ -235,6 +235,34 @@ function modalNota(d, voltar) {
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
   else m.querySelector('#m-desfazer').onclick = decidir('reabrir');
 }
+// Visualizador de fotos (comprovantes da prestação): foto grande, clique amplia, setas para navegar
+function verFotos(lista, inicio = 0) {
+  let i = inicio;
+  const m = abrirModal(`<h3 id="vf-titulo"></h3>
+    <div class="nota-img" id="vf-img"></div>
+    <div class="acts" style="justify-content:space-between">
+      <span><button class="btn secondary" id="vf-ant">← Anterior</button> <button class="btn secondary" id="vf-prox">Próxima →</button></span>
+      <span><a class="btn secondary" id="vf-abrir" target="_blank" rel="noopener">Abrir em nova aba ↗</a> <button class="btn" id="vf-fechar">Fechar</button></span>
+    </div>`, 'modal-nota');
+  const mostra = () => {
+    m.querySelector('#vf-titulo').textContent = `Comprovante ${i + 1} de ${lista.length}`;
+    const caixa = m.querySelector('#vf-img');
+    caixa.classList.remove('zoom');
+    caixa.innerHTML = `<img src="${lista[i]}" alt="Comprovante ${i + 1}" title="Clique para ampliar">`;
+    caixa.querySelector('img').onclick = () => caixa.classList.toggle('zoom');
+    caixa.querySelector('img').onerror = () => { caixa.innerHTML = '<span class="sem">Não foi possível carregar a foto.</span>'; };
+    const aba = m.querySelector('#vf-abrir');
+    aba.classList.toggle('hidden', lista[i].startsWith('data:')); // foto ainda não enviada: sem link
+    aba.href = lista[i];
+    m.querySelector('#vf-ant').disabled = i === 0;
+    m.querySelector('#vf-prox').disabled = i === lista.length - 1;
+  };
+  m.querySelector('#vf-ant').onclick = () => { i--; mostra(); };
+  m.querySelector('#vf-prox').onclick = () => { i++; mostra(); };
+  m.querySelector('#vf-fechar').onclick = fecharModal;
+  mostra();
+}
+
 // Desfazer = a despesa volta para "Em análise" (sai dos totais, se estava aprovada)
 const confirmarDesfazer = d => confirmar(
   d.status === 'Aprovada'
@@ -370,8 +398,8 @@ function telaNova(id) {
             <div class="field"><label>Função</label><input class="input" id="n-funcao" readonly placeholder="Automático"></div>
           </div>
           <div class="row3">
-            <div class="field"><label>Data inicial</label><input class="input" type="date" id="n-ini" value="${p ? p.dataInicial : ''}"></div>
-            <div class="field"><label>Data final</label><input class="input" type="date" id="n-fim" value="${p ? p.dataFinal : ''}"></div>
+            <div class="field"><label>Data inicial</label><input class="input" type="date" id="n-ini" min="2000-01-01" max="${Number(hoje().slice(0, 4)) + 1}-12-31" value="${p ? p.dataInicial : ''}"></div>
+            <div class="field"><label>Data final</label><input class="input" type="date" id="n-fim" min="2000-01-01" max="${Number(hoje().slice(0, 4)) + 1}-12-31" value="${p ? p.dataFinal : ''}"></div>
             <div class="field"><label>Mês de referência</label><select class="input" id="n-mes"></select></div>
           </div>
           <span class="muted small">A regra do mês de referência (quando o período passa de um mês para outro) ainda será definida com o Maurício. Por padrão, fica o mês da data inicial.</span>
@@ -380,8 +408,11 @@ function telaNova(id) {
           <div class="row3">${CAT.map(c => `<div class="field"><label>${esc(c.nome)}</label><input class="input" inputmode="numeric" data-cat="${c.chave}" data-c="${p ? Math.round(p[c.chave] * 100) : 0}"></div>`).join('')}</div>
           <div class="field"><label>Observação</label><textarea class="input" id="n-obs" maxlength="300" placeholder="Ex.: Veículo / lavação">${p ? esc(p.observacao) : ''}</textarea></div>
         </div>
-        <div class="sec"><h3>3. Comprovantes (opcional · fase 2)</h3>
-          <div class="dropzone">📎 Anexo das fotos das notas — disponível na fase 2<br><span class="small">JPG, PNG ou PDF</span></div>
+        <div class="sec"><h3>3. Comprovantes (opcional)</h3>
+          ${D.fotos ? `<div class="comprovantes" id="n-fotos"></div>
+          <div class="acts" style="display:flex;gap:10px;align-items:center"><button type="button" class="btn secondary" id="n-add-foto">📎 Anexar fotos das notas</button>
+            <span class="muted small">JPG ou PNG · até 10 fotos · as fotos novas são enviadas ao salvar</span></div>`
+          : '<div class="dropzone">Envio de fotos indisponível no momento.</div>'}
         </div>
       </form>
       <div class="card total-card">
@@ -419,6 +450,45 @@ function telaNova(id) {
   $('n-fim').addEventListener('change', () => meses());
   meses(p ? p.mesRef : '');
 
+  // ---- comprovantes: fotos já salvas (no servidor) + fotos novas (enviadas ao salvar) ----
+  let salvas = p ? p.fotos || 0 : 0, versao = Date.now();
+  const novas = [];
+  const urlSalva = i => `/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}?v=${versao}`;
+  const todasFotos = () => [...Array.from({ length: salvas }, (_, i) => urlSalva(i)), ...novas];
+  const desenhaFotos = () => {
+    if (!$('n-fotos')) return;
+    $('n-fotos').innerHTML = todasFotos().map((src, i) => `<div class="thumb">
+      <img src="${src}" alt="Comprovante ${i + 1}" data-ver="${i}">
+      ${i >= salvas ? '<span class="thumb-nova">nova</span>' : ''}
+      <button type="button" class="x" data-rm="${i}" title="Remover" aria-label="Remover foto ${i + 1}">×</button></div>`).join('')
+      || '<span class="muted small">Nenhuma foto anexada.</span>';
+    $('n-fotos').querySelectorAll('[data-ver]').forEach(im => im.onclick = () => verFotos(todasFotos(), Number(im.dataset.ver)));
+    $('n-fotos').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+      const i = Number(b.dataset.rm);
+      if (i >= salvas) { novas.splice(i - salvas, 1); return desenhaFotos(); }
+      if (!(await confirmar('A foto sai desta prestação e é apagada.', { titulo: 'Remover comprovante?', ok: 'Remover', perigo: true }))) return;
+      try {
+        const r = await api(`/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}`, { method: 'DELETE' });
+        salvas = r.fotos; versao = Date.now(); desenhaFotos();
+      } catch (e) { avisar(e.message, 'Não foi possível remover'); }
+    });
+  };
+  if ($('n-add-foto')) $('n-add-foto').onclick = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+    inp.onchange = async () => {
+      const arquivos = [...(inp.files || [])];
+      const vagas = 10 - salvas - novas.length;
+      if (arquivos.length > vagas) avisar(`Cada prestação aceita até 10 fotos. ${vagas > 0 ? `Só ${vagas} foram adicionadas.` : 'Remova alguma antes de anexar outra.'}`, 'Limite de fotos');
+      for (const arq of arquivos.slice(0, Math.max(0, vagas))) {
+        try { novas.push(await comprimirFoto(arq)); } catch (e) { avisar(`${arq.name}: ${e.message}`, 'Foto não adicionada'); }
+      }
+      desenhaFotos();
+    };
+    inp.click();
+  };
+  desenhaFotos();
+
   $('n-salvar').addEventListener('click', async () => {
     const corpo = { colaboradorId: $('n-colab').value, dataInicial: $('n-ini').value, dataFinal: $('n-fim').value, mesRef: $('n-mes').value, observacao: $('n-obs').value };
     CAT.forEach(c => { corpo[c.chave] = Number(document.querySelector(`[data-cat="${c.chave}"]`).dataset.c || 0) / 100; });
@@ -426,10 +496,18 @@ function telaNova(id) {
     $('n-salvar').disabled = true;
     try {
       const r = p ? await post('/api/admin/prestacoes/' + encodeURIComponent(p.id), corpo, 'PUT') : await post('/api/admin/prestacoes', corpo);
+      // envia as fotos novas, uma de cada vez; se alguma falhar, a prestação já está salva e dá para anexar de novo
+      const falhas = [];
+      for (let i = 0; i < novas.length; i++) {
+        $('n-salvar').textContent = `Enviando foto ${i + 1} de ${novas.length}...`;
+        try { await post(`/api/admin/prestacoes/${encodeURIComponent(r.id)}/fotos`, { foto: novas[i] }); }
+        catch (e) { falhas.push(e.message); }
+      }
       await carregar();
+      if (falhas.length) await avisar(`A prestação foi salva, mas ${falhas.length} foto(s) não foram enviadas (${falhas[0]}). Abra a prestação e anexe de novo.`, 'Fotos não enviadas');
       Object.assign(F.l, { ano: r.mesRef.slice(0, 4), mes: r.mesRef.slice(5), colab: '', funcao: '', busca: '' });
       location.hash = '#lancamentos';
-    } catch (e) { $('n-erro').textContent = e.message; $('n-erro').classList.remove('hidden'); $('n-salvar').disabled = false; }
+    } catch (e) { $('n-erro').textContent = e.message; $('n-erro').classList.remove('hidden'); $('n-salvar').disabled = false; $('n-salvar').textContent = 'Salvar prestação'; }
   });
   if (p) $('n-excluir').addEventListener('click', async () => {
     if (!(await confirmar(`Prestação de ${p.colaborador}, de ${dmy(p.dataInicial)} a ${dmy(p.dataFinal)}. Isso não pode ser desfeito.`, { titulo: 'Excluir esta prestação?', ok: 'Excluir', perigo: true }))) return;
@@ -584,8 +662,8 @@ function baixarBackup() {
     { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Ativo', 7), col('Criado em', 18)],
       linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, sim(c.ativo), quando(c.criadoEm)]) },
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
-    { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18)],
-      linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm)]) },
+    { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
+      linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
     { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14), col('Foto', 7)],
       linhas: D.despesas.map(d => [d.id, d.colaborador, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor, sim(d.foto)]) },
   ]);
