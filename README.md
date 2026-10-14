@@ -17,7 +17,7 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 - **Mês de referência:** por padrão, o mês da data inicial (regra final ainda a definir com o Maurício).
 - **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
 - **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login. Trocar o `SESSION_SECRET` desconecta todo mundo.
-- **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico. Em Colaboradores, "Baixar backup" gera um `.xlsx` com todas as abas (sem as senhas).
+- **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico. No menu lateral do painel, "Backup completo (Excel)" gera um `.xlsx` com todas as abas (sem as senhas).
 - **Foto da nota (opcional):** no celular, "Tirar foto" (câmera) ou "Galeria". A foto é reduzida no próprio celular antes de enviar. Enquanto a despesa está em análise, o colaborador pode adicionar ou trocar a foto no detalhe. No painel, "📷 Ver nota" abre a foto (clique para ampliar) ao lado dos dados, com Aprovar e Recusar. As fotos ficam no Cloudinary em modo privado: só abrem pelo sistema, para quem está logado.
 - **Comprovantes da prestação:** na Nova prestação (ou ao editar), "📎 Anexar fotos das notas" aceita até 10 fotos (JPG/PNG, da pasta do computador). As fotos novas são enviadas ao salvar; dá para ver em tamanho grande, navegar entre elas e remover. Nos Lançamentos, 📎N mostra quantas fotos a prestação tem.
 
@@ -113,7 +113,7 @@ Sobem o servidor numa porta separada, **sempre em memória** (ignoram o `.env`: 
 ## Backup
 
 - **Automático do Google:** a planilha guarda o histórico de versões (no Google Sheets: Arquivo → Histórico de versões). Dá para voltar a uma versão anterior se alguém apagar algo por engano.
-- **Manual (recomendado uma vez por mês):** no painel, em Colaboradores, clique em **Baixar backup** e guarde o arquivo em uma pasta da empresa. Ou, na planilha, Arquivo → Fazer uma cópia.
+- **Manual (recomendado uma vez por mês):** no painel, clique em **Backup completo (Excel)** no menu lateral e guarde o arquivo em uma pasta da empresa. Ou, na planilha, Arquivo → Fazer uma cópia.
 
 ## Estrutura
 

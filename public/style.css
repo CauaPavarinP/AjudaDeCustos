@@ -64,6 +64,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .nav a:hover { background: var(--bg); }
 .nav a.on { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 .nav a .count { float: right; background: var(--amber-soft); color: var(--amber); border-radius: 999px; font-size: 11px; padding: 0 7px; font-weight: 600; }
+.sidebar .backup { margin: 16px 8px 0; align-self: flex-start; }
 .sidebar .who { margin-top: auto; padding: 0 8px; display: flex; flex-direction: column; gap: 2px; }
 .sidebar .who b { font-size: 13px; }
 .sidebar .who .btn { align-self: flex-start; margin-top: 8px; }
