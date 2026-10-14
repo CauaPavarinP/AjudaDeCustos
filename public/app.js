@@ -269,7 +269,7 @@ function telaDetalhe(d) {
     } catch (err) { telaDetalhe(d); erro('d-erro-foto', err.message); }
   }, 'd-erro-foto');
   if ($('d-excluir')) $('d-excluir').onclick = async () => {
-    if (!confirm('Excluir esta despesa?')) return;
+    if (!(await confirmar('Ela sai da sua lista e do painel do Maurício.', { titulo: 'Excluir esta despesa?', ok: 'Excluir', perigo: true }))) return;
     try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); } catch (err) { erro('d-erro', err.message); }
   };
 }
@@ -312,7 +312,7 @@ function telaPerfil() {
 // Não redesenha enquanto o filtro de mês está aberto.
 let atualizando = false;
 async function atualizarSozinho() {
-  if (!me || atualizando || document.hidden || !['inicio', 'detalhe'].includes(telaAtual)) return;
+  if (!me || atualizando || document.hidden || dialogoAberto() || !['inicio', 'detalhe'].includes(telaAtual)) return;
   if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
   atualizando = true;
   try {

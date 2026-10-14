@@ -165,9 +165,9 @@ function telaLancamentos() {
   set('l-ano', 'ano'); set('l-mes', 'mes'); set('l-func', 'funcao'); set('l-colab', 'colab'); set('l-busca', 'busca');
   document.querySelectorAll('[data-ap],[data-rc]').forEach(b => b.addEventListener('click', async () => {
     const id = b.dataset.ap || b.dataset.rc, acao = b.dataset.ap ? 'aprovar' : 'recusar';
-    if (acao === 'recusar' && !confirm('Recusar essa despesa? O colaborador verá o status "Recusada".')) return;
+    if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
     b.disabled = true;
-    try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); await carregar(); telaLancamentos(); } catch (e) { alert(e.message); b.disabled = false; }
+    try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); await carregar(); telaLancamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); b.disabled = false; }
   }));
   document.querySelectorAll('[data-nota]').forEach(b => b.addEventListener('click', () => modalNota(D.despesas.find(d => d.id === b.dataset.nota))));
   document.querySelectorAll('tr[data-row]').forEach(tr => tr.addEventListener('click', () => {
@@ -223,10 +223,11 @@ function modalNota(d, voltar) {
   }
   m.querySelector('#m-fechar').onclick = () => (voltar ? voltar() : fecharModal());
   const decidir = acao => async e => {
-    if (acao === 'recusar' && !confirm('Recusar essa despesa? O colaborador verá o status "Recusada".')) return;
-    e.currentTarget.disabled = true;
+    const botao = e.currentTarget; // guardado antes do await (depois dele o evento já não aponta para o botão)
+    if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
+    botao.disabled = true;
     try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); fecharModal(); desenharTela(); }
-    catch (err) { alert(err.message); e.currentTarget.disabled = false; }
+    catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
 }
@@ -346,8 +347,8 @@ function telaNova(id) {
     } catch (e) { $('n-erro').textContent = e.message; $('n-erro').classList.remove('hidden'); $('n-salvar').disabled = false; }
   });
   if (p) $('n-excluir').addEventListener('click', async () => {
-    if (!confirm(`Excluir a prestação de ${p.colaborador} (${dmy(p.dataInicial)} a ${dmy(p.dataFinal)})?`)) return;
-    try { await api('/api/admin/prestacoes/' + encodeURIComponent(p.id), { method: 'DELETE' }); await carregar(); location.hash = '#lancamentos'; } catch (e) { alert(e.message); }
+    if (!(await confirmar(`Prestação de ${p.colaborador}, de ${dmy(p.dataInicial)} a ${dmy(p.dataFinal)}. Isso não pode ser desfeito.`, { titulo: 'Excluir esta prestação?', ok: 'Excluir', perigo: true }))) return;
+    try { await api('/api/admin/prestacoes/' + encodeURIComponent(p.id), { method: 'DELETE' }); await carregar(); location.hash = '#lancamentos'; } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
   });
 }
 
@@ -469,24 +470,24 @@ function telaColaboradores() {
   document.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => modalColab(acha(b.dataset.ed)));
   document.querySelectorAll('[data-pw]').forEach(b => b.onclick = async () => {
     const c = acha(b.dataset.pw);
-    if (!confirm(`Gerar uma nova senha para ${c.nome}? A senha atual deixa de funcionar.`)) return;
-    try { const r = await post('/api/admin/colaboradores/' + encodeURIComponent(c.id), { novaSenha: true }, 'PUT'); mostrarSenha(r); } catch (e) { alert(e.message); }
+    if (!(await confirmar(`A senha atual de ${c.nome} deixa de funcionar, e quem estiver logado com ela é desconectado.`, { titulo: 'Gerar nova senha?', ok: 'Gerar nova senha' }))) return;
+    try { const r = await post('/api/admin/colaboradores/' + encodeURIComponent(c.id), { novaSenha: true }, 'PUT'); mostrarSenha(r); } catch (e) { avisar(e.message, 'Não foi possível gerar a senha'); }
   });
-  const ativo = (id, v, msg) => async () => {
-    if (!confirm(msg)) return;
-    try { await post('/api/admin/colaboradores/' + encodeURIComponent(id), { ativo: v }, 'PUT'); await carregar(); telaColaboradores(); } catch (e) { alert(e.message); }
+  const ativo = (id, v, msg, opcoes) => async () => {
+    if (!(await confirmar(msg, opcoes))) return;
+    try { await post('/api/admin/colaboradores/' + encodeURIComponent(id), { ativo: v }, 'PUT'); await carregar(); telaColaboradores(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
   };
-  document.querySelectorAll('[data-off]').forEach(b => { const c = acha(b.dataset.off); b.onclick = ativo(c.id, false, `Desativar ${c.nome}? Ele não consegue mais entrar no app. O histórico continua nos resumos.`); });
-  document.querySelectorAll('[data-on]').forEach(b => { const c = acha(b.dataset.on); b.onclick = ativo(c.id, true, `Reativar ${c.nome}?`); });
+  document.querySelectorAll('[data-off]').forEach(b => { const c = acha(b.dataset.off); b.onclick = ativo(c.id, false, `${c.nome} não consegue mais entrar no app. O histórico continua nos resumos.`, { titulo: 'Desativar colaborador?', ok: 'Desativar', perigo: true }); });
+  document.querySelectorAll('[data-on]').forEach(b => { const c = acha(b.dataset.on); b.onclick = ativo(c.id, true, `${c.nome} volta a conseguir entrar no app com a senha atual.`, { titulo: 'Reativar colaborador?', ok: 'Reativar' }); });
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     const c = acha(b.dataset.del);
-    if (!confirm(`Excluir ${c.nome} do cadastro? Isso não pode ser desfeito.\n\nSó é possível excluir quem ainda não tem nenhum lançamento.`)) return;
-    try { await api('/api/admin/colaboradores/' + encodeURIComponent(c.id), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { alert(e.message); }
+    if (!(await confirmar(`${c.nome} sai do cadastro. Isso não pode ser desfeito.\n\nSó é possível excluir quem ainda não tem nenhum lançamento.`, { titulo: 'Excluir colaborador?', ok: 'Excluir', perigo: true }))) return;
+    try { await api('/api/admin/colaboradores/' + encodeURIComponent(c.id), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
   });
   document.querySelectorAll('[data-delf]').forEach(b => b.onclick = async () => {
     const f = b.dataset.delf;
-    if (!confirm(`Excluir a função "${f}"?`)) return;
-    try { await api('/api/admin/funcoes/' + encodeURIComponent(f), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { alert(e.message); }
+    if (!(await confirmar(`A função "${f}" sai da lista de funções.`, { titulo: 'Excluir função?', ok: 'Excluir', perigo: true }))) return;
+    try { await api('/api/admin/funcoes/' + encodeURIComponent(f), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
   });
 }
 
@@ -575,7 +576,7 @@ let telaDesatualizada = false, atualizando = false;
 function podeRedesenhar() {
   const ativo = document.activeElement;
   const escolhendo = ativo && $('page').contains(ativo) && ativo.tagName === 'SELECT';
-  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !escolhendo;
+  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !dialogoAberto() && !escolhendo;
 }
 // Redesenha a tela mantendo a rolagem e, se houver, o campo com o cursor (e a posição do cursor)
 function redesenharMantendoFoco() {

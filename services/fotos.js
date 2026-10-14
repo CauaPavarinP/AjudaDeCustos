@@ -21,11 +21,29 @@ function lerDataUrl(dataUrl) {
   return { buf };
 }
 
+// Aceita o valor colado com "CLOUDINARY_URL=" na frente, entre aspas ou com espaços sobrando
+function limparUrl(bruto) {
+  return String(bruto || '').trim()
+    .replace(/^CLOUDINARY_URL\s*=\s*/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/\s+/g, '');
+}
 function lerConfig(env) {
-  const url = String(env.CLOUDINARY_URL || '').trim().replace(/^CLOUDINARY_URL=/, ''); // aceita colado com o nome na frente
+  const url = limparUrl(env.CLOUDINARY_URL);
   const m = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec(url);
-  if (!m) return null;
+  if (!m || /[<>]/.test(url)) return null;
   return { apiKey: m[1], apiSecret: m[2], cloud: m[3], base: env.CLOUDINARY_API_BASE || 'https://api.cloudinary.com' };
+}
+// Diz o que está errado no valor, sem nunca mostrar a chave ou o segredo
+function problemaUrl(bruto) {
+  const url = limparUrl(bruto);
+  if (!url.startsWith('cloudinary://')) return 'o valor precisa começar com cloudinary://';
+  if (/[<>]/.test(url)) return 'ainda tem <your_api_key> ou <your_api_secret>; troque pelos valores reais da tabela API Keys';
+  const resto = url.slice('cloudinary://'.length);
+  if (!resto.includes('@')) return 'falta o @ e o nome da nuvem no fim (ex.: @es2gjfq9)';
+  if (!resto.split('@')[0].includes(':')) return 'falta o ":" entre a API Key e o API Secret';
+  if (!resto.split('@').pop()) return 'falta o nome da nuvem depois do @';
+  return 'formato não reconhecido';
 }
 
 // Assinatura do Cloudinary: parâmetros em ordem alfabética, "chave=valor" unidos por "&",
@@ -83,9 +101,9 @@ function criarMemoria() {
 function criarFotos(env) {
   const cfg = lerConfig(env);
   if (cfg) return criarCloudinary(cfg);
-  if (env.CLOUDINARY_URL) console.warn('[fotos] CLOUDINARY_URL em formato inválido. Fotos desligadas.');
+  if (env.CLOUDINARY_URL) console.warn(`[fotos] CLOUDINARY_URL em formato inválido (${problemaUrl(env.CLOUDINARY_URL)}). Fotos desligadas.`);
   if (env.NODE_ENV === 'production') {
-    console.warn('[fotos] Sem CLOUDINARY_URL: envio de fotos desligado.');
+    if (!env.CLOUDINARY_URL) console.warn('[fotos] Sem CLOUDINARY_URL: envio de fotos desligado.');
     return null;
   }
   console.warn('[fotos] Sem CLOUDINARY_URL: fotos em memória (apenas para testes locais).');
