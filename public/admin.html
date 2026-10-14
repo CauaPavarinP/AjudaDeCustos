@@ -10,100 +10,34 @@
 
 <!-- Login do painel -->
 <form id="v-login" class="card admin-login hidden">
-  <div class="brandrow"><div class="logo">101</div><div><b>Ajuda de Custo</b><div class="muted small">Comercial • 101 do Brasil</div></div></div>
-  <div class="field"><label for="a-user">Usuário</label><input id="a-user" class="input" autocomplete="username" required></div>
+  <div class="login-brand" style="margin:0 0 6px"><div class="logo-rs">R$</div><h1>Ajuda de Custo</h1><span class="muted small">Comercial • 101 do Brasil · painel</span></div>
+  <div class="field"><label for="a-user">Usuário</label><input id="a-user" class="input" autocomplete="username" autocapitalize="none" required></div>
   <div class="field"><label for="a-pass">Senha</label><input id="a-pass" class="input" type="password" autocomplete="current-password" required></div>
   <div id="a-erro" class="alert hidden"></div>
-  <button class="btn big" type="submit">Entrar</button>
+  <button class="btn lg block" type="submit">Entrar</button>
 </form>
 
-<div id="v-painel" class="hidden">
-  <header class="header">
-    <div class="logo">101</div>
-    <div class="title"><b>Ajuda de Custo</b><span class="muted small">Comercial • 101 do Brasil</span></div>
-    <nav class="tabs">
-      <button class="tab on" data-tab="extrato">Extrato</button>
-      <button class="tab" data-tab="funcionarios">Funcionários</button>
+<!-- Painel do Maurício -->
+<div id="v-painel" class="layout hidden">
+  <aside class="sidebar">
+    <div class="brand"><b>Ajuda de Custo</b><span>Comercial • 101 do Brasil</span></div>
+    <nav class="nav" id="nav">
+      <a href="#lancamentos" data-v="lancamentos">Lançamentos <span class="count hidden" id="nav-pend" title="Despesas do celular aguardando aprovação">0</span></a>
+      <a href="#nova" data-v="nova">Nova prestação</a>
+      <a href="#colaborador" data-v="colaborador">Resumo por colaborador</a>
+      <a href="#funcao" data-v="funcao">Resumo por função</a>
+      <a href="#colaboradores" data-v="colaboradores">Colaboradores</a>
     </nav>
-    <button class="logout" id="b-sair">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-      Sair
-    </button>
-  </header>
-
-  <!-- Extrato -->
-  <main class="content" id="t-extrato">
-    <div class="page-title">
-      <div><h1>Extrato de ajuda de custo</h1><p class="muted">Veja os lançamentos por função ou por funcionário.</p></div>
-      <a class="btn secondary" id="b-export" href="#">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-        Exportar Excel
-      </a>
+    <div class="who">
+      <b id="who-nome">Maurício</b>
+      <span class="muted small">Administrador</span>
+      <button class="btn xs" id="b-sair" type="button">Sair</button>
     </div>
-    <div class="card filters">
-      <div class="field"><label>Ver por</label>
-        <div class="seg"><button data-modo="funcao" class="on">Função</button><button data-modo="funcionario">Funcionário</button></div>
-      </div>
-      <div class="field" style="min-width:240px"><label for="x-quem" id="x-quem-label">Função</label><select id="x-quem" class="input"></select></div>
-      <div class="field"><label for="x-ini">De</label><input id="x-ini" type="date" class="input"></div>
-      <div class="field"><label for="x-fim">Até</label><input id="x-fim" type="date" class="input"></div>
-      <div class="field"><label for="x-tipo">Tipo de despesa</label><select id="x-tipo" class="input"><option value="">Todos</option></select></div>
-    </div>
-    <div class="kpis">
-      <div class="card kpi"><span class="l">Total no período</span><span class="v" id="k-total">—</span><span class="d" id="k-periodo"></span></div>
-      <div class="card kpi"><span class="l">Lançamentos</span><span class="v" id="k-qtd">—</span><span class="d" id="k-func"></span></div>
-      <div class="card kpi"><span class="l">Maior gasto</span><span class="v" id="k-tipo">—</span><span class="d" id="k-tipo-d"></span></div>
-      <div class="card kpi"><span class="l">Média por funcionário</span><span class="v" id="k-media">—</span><span class="d" id="k-media-d"></span></div>
-    </div>
-    <div class="body2">
-      <div class="card table-card">
-        <div class="table-top"><span>Lançamentos</span><span class="muted small" id="x-registros"></span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Data</th><th>Funcionário</th><th>Função</th><th>Tipo</th><th>Descrição</th><th class="r">Valor</th></tr></thead>
-            <tbody id="x-linhas"></tbody>
-          </table>
-        </div>
-        <div class="table-foot"><span class="muted" id="x-rodape"></span><b id="x-total-rodape"></b></div>
-      </div>
-      <div class="card side">
-        <h3>Total por funcionário</h3>
-        <div id="x-por-func" class="stack"></div>
-        <span class="muted small">Clique em um nome para ver só o extrato dele.</span>
-      </div>
-    </div>
-  </main>
-
-  <!-- Funcionários -->
-  <main class="content hidden" id="t-funcionarios">
-    <div class="page-title">
-      <div><h1>Funcionários</h1><p class="muted">Quem pode lançar ajuda de custo e com qual função.</p></div>
-      <button class="btn" id="b-cadastrar">+ Cadastrar funcionário</button>
-    </div>
-    <div class="body2" style="grid-template-columns:1fr 400px">
-      <div class="card table-card">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Nome</th><th>Função</th><th>Telefone</th><th>Código</th><th>Situação</th><th class="r">Ações</th></tr></thead>
-            <tbody id="f-linhas"></tbody>
-          </table>
-        </div>
-      </div>
-      <form class="card form-card" id="f-form">
-        <h3 id="f-titulo">Cadastrar funcionário</h3>
-        <div class="field"><label for="f-nome">Nome completo</label><input id="f-nome" class="input" maxlength="80" required></div>
-        <div class="field"><label for="f-funcao">Função</label><input id="f-funcao" class="input" list="funcoes" maxlength="60" placeholder="Ex.: Vendedor externo" required><datalist id="funcoes"></datalist></div>
-        <div class="field"><label for="f-tel">Telefone (WhatsApp)</label><input id="f-tel" class="input" maxlength="30" placeholder="(16) 99999-0000"></div>
-        <div id="f-codigo" class="code-box hidden"></div>
-        <div id="f-erro" class="alert hidden"></div>
-        <div class="actions">
-          <button type="button" class="btn secondary" id="f-cancelar">Cancelar</button>
-          <button type="submit" class="btn" id="f-salvar">Salvar</button>
-        </div>
-      </form>
-    </div>
-  </main>
+  </aside>
+  <main class="page" id="page"></main>
 </div>
+
+<div id="modal" class="modal-bg hidden"></div>
 
 <script src="/admin.js"></script>
 </body>

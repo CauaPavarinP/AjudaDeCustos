@@ -30,12 +30,15 @@ const TABELAS = {
 
 const novoId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 10);
 
-// Aceita "186.4", "186,40", "1234,5" (o formato na planilha pode variar com a localidade)
+// Aceita "186.4", "186,40", "1.234,50", "1,234.50" (o formato na planilha pode variar com a localidade).
+// Quando há ponto e vírgula, o último dos dois é o separador decimal.
 function paraNumero(v) {
   if (typeof v === 'number') return v;
   let s = String(v ?? '').trim().replace(/[R$\s]/g, '');
   if (!s) return 0;
-  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const dec = s.lastIndexOf(',') > s.lastIndexOf('.') ? ',' : '.';
+  if (dec === ',') s = s.replace(/\./g, '').replace(',', '.');
+  else if (s.includes(',')) s = s.replace(/,/g, '');
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 }

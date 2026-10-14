@@ -33,7 +33,15 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
 const store = criarStore(process.env);
 const app = express();
 app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
 app.use(express.json({ limit: '30kb' }));
+app.use((req, res, next) => { if (!req.body || typeof req.body !== 'object') req.body = {}; next(); });
 app.use(session({
   name: 'ajudacusto.sid',
   secret: process.env.SESSION_SECRET || 'dev-secret-troque',
@@ -83,6 +91,10 @@ function falhou(k) {
   tentativas.set(k, t);
 }
 const sucesso = k => tentativas.delete(k);
+setInterval(() => {
+  const agora = Date.now();
+  for (const [k, t] of tentativas) if (!t.ate || t.ate < agora) tentativas.delete(k);
+}, 60 * 60 * 1000).unref();
 
 function entrar(req, res, campos) {
   req.session.regenerate(err => {
@@ -293,10 +305,14 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
 }));
 
 // ---------------- páginas ----------------
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+// no-cache: o navegador sempre confere se há versão nova (evita admin.html antigo com admin.js novo)
+const semCache = res => res.setHeader('Cache-Control', 'no-cache');
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders: semCache }));
+app.get('/admin', (req, res) => { semCache(res); res.sendFile(path.join(__dirname, 'public', 'admin.html')); });
+app.use('/api', (req, res) => erro(res, 'Rota não encontrada.', 404));
 
 app.use((err, req, res, next) => {
+  if (err.status >= 400 && err.status < 500) return erro(res, 'Requisição inválida.', err.status);
   console.error('[erro]', err);
   res.status(500).json({ erro: 'Erro interno. Tente novamente.' });
 });

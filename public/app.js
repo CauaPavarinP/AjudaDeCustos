@@ -20,7 +20,7 @@ let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ulti
 async function api(url, opts = {}) {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const corpo = await r.json().catch(() => ({}));
-  if (r.status === 401 && !url.endsWith('/api/login')) { telaLogin(); throw new Error(corpo.erro || 'Faça login.'); }
+  if (r.status === 401 && !url.endsWith('/api/login')) { telaLogin(); throw Object.assign(new Error(corpo.erro || 'Faça login.'), { login: true }); }
   if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão. Tente novamente.');
   return corpo;
 }
@@ -53,11 +53,12 @@ function telaLogin() {
   $('l-esq').onclick = () => $('l-esq-msg').classList.remove('hidden');
   $('f-login').addEventListener('submit', async e => {
     e.preventDefault(); erro('l-erro', '');
+    const b = e.submitter || $('f-login').querySelector('[type=submit]'); b.disabled = true;
     try {
       await post('/api/login', { usuario: $('l-user').value.trim(), senha: $('l-pass').value });
       try { localStorage.setItem('ultimoUsuario', $('l-user').value.trim().toLowerCase()); } catch {}
       await iniciar();
-    } catch (err) { erro('l-erro', err.message); }
+    } catch (err) { erro('l-erro', err.message); b.disabled = false; }
   });
 }
 
@@ -192,13 +193,15 @@ function telaPerfil() {
   $('p-salvar').onclick = async () => {
     erro('p-erro', ''); $('p-ok').classList.add('hidden');
     if ($('p-nova').value !== $('p-conf').value) return erro('p-erro', 'As duas senhas novas não são iguais.');
+    $('p-salvar').disabled = true;
     try {
       await post('/api/me/senha', { atual: $('p-atual').value, nova: $('p-nova').value });
       ['p-atual', 'p-nova', 'p-conf'].forEach(id => { $(id).value = ''; });
       $('p-ok').classList.remove('hidden');
     } catch (err) { erro('p-erro', err.message); }
+    $('p-salvar').disabled = false;
   };
-  $('p-sair').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); telaLogin(); };
+  $('p-sair').onclick = async () => { try { await fetch('/api/logout', { method: 'POST' }); } catch {} telaLogin(); };
 }
 
 // ---------- início ----------
@@ -207,4 +210,9 @@ async function iniciar() {
   if (!categorias.length) categorias = await api('/api/categorias');
   await telaInicio();
 }
-iniciar().catch(() => {});
+iniciar().catch(err => {
+  // 401 já leva ao login; qualquer outro erro (servidor fora do ar, sem internet) mostra aviso em vez de tela em branco
+  if (me) return;
+  telaLogin();
+  if (!err.login) erro('l-erro', 'Não foi possível conectar ao servidor. Tente de novo em instantes.');
+});
