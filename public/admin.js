@@ -516,13 +516,24 @@ window.addEventListener('hashchange', render);
 // ---------- atualização automática ----------
 // A cada 30 s (só com a aba visível) busca os dados de novo, para as despesas enviadas pelo celular
 // aparecerem sem precisar apertar F5. A tela só é redesenhada quando isso não atrapalha:
-// fora de "Nova prestação", sem janela aberta e sem ninguém digitando num campo.
+// fora de "Nova prestação", sem janela aberta e sem uma lista de opções aberta.
+// Se o cursor estiver num campo de texto (ex.: Buscar), ele volta para o mesmo lugar depois.
 const ATUALIZA_MS = 30000;
 let telaDesatualizada = false, atualizando = false;
 function podeRedesenhar() {
   const ativo = document.activeElement;
-  const digitando = ativo && $('page').contains(ativo) && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName);
-  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !digitando;
+  const escolhendo = ativo && $('page').contains(ativo) && ativo.tagName === 'SELECT';
+  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !escolhendo;
+}
+// Redesenha a tela mantendo a rolagem e, se houver, o campo com o cursor (e a posição do cursor)
+function redesenharMantendoFoco() {
+  const ativo = document.activeElement, y = window.scrollY;
+  const campo = ativo && ativo.id && $('page').contains(ativo) && /^(INPUT|TEXTAREA)$/.test(ativo.tagName)
+    ? { id: ativo.id, ini: ativo.selectionStart, fim: ativo.selectionEnd } : null;
+  desenharTela();
+  window.scrollTo(0, y);
+  const el = campo && $(campo.id);
+  if (el) { el.focus(); try { el.setSelectionRange(campo.ini, campo.fim); } catch { /* campo sem seleção */ } }
 }
 async function atualizarSozinho() {
   if (!D || atualizando || document.hidden) return;
@@ -532,10 +543,8 @@ async function atualizarSozinho() {
     await carregar();
     if (JSON.stringify(D) !== antes) telaDesatualizada = true;
     if (telaDesatualizada && podeRedesenhar()) {
-      const y = window.scrollY;
       telaDesatualizada = false;
-      desenharTela();
-      window.scrollTo(0, y);
+      redesenharMantendoFoco();
     }
   } catch { /* sem conexão ou sessão expirada: tenta de novo na próxima vez */ }
   finally { atualizando = false; }
