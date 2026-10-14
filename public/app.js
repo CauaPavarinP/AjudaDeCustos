@@ -16,6 +16,7 @@ const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; retur
 const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
+let telaAtual = '', detalheId = '';
 
 async function api(url, opts = {}) {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
@@ -42,6 +43,7 @@ document.querySelectorAll('#tabbar button').forEach(b => b.addEventListener('cli
 
 // ---------- C1 · Login ----------
 function telaLogin() {
+  telaAtual = 'login';
   me = null;
   mostrar(`
     <div class="login-brand"><div class="logo-rs">R$</div><h1>Ajuda de Custo</h1><span class="muted small">101 do Brasil · área do colaborador</span></div>
@@ -67,8 +69,10 @@ function telaLogin() {
 }
 
 // ---------- C2 · Minhas despesas ----------
-async function telaInicio() {
-  despesas = await api('/api/despesas');
+// "recebidas" vem preenchida só pela atualização automática (os botões chamam sem argumento)
+async function telaInicio(recebidas) {
+  despesas = Array.isArray(recebidas) ? recebidas : await api('/api/despesas');
+  telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
   const total = lista.reduce((s, d) => s + d.valor, 0);
@@ -99,6 +103,7 @@ async function telaInicio() {
 
 // ---------- C3 · Nova despesa ----------
 function telaNova() {
+  telaAtual = 'nova';
   let cat = '', centavos = 0;
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
@@ -151,6 +156,7 @@ function telaNova() {
 
 // ---------- C4 · Despesa enviada ----------
 function telaEnviada() {
+  telaAtual = 'enviada';
   const d = ultima;
   mostrar(`
     <div class="success"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
@@ -167,6 +173,7 @@ function telaEnviada() {
 
 // ---------- C5 · Detalhe da despesa ----------
 function telaDetalhe(d) {
+  telaAtual = 'detalhe'; detalheId = d.id;
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
   const linha = d.status === 'Aprovada' ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
@@ -194,6 +201,7 @@ function telaDetalhe(d) {
 
 // ---------- Perfil ----------
 function telaPerfil() {
+  telaAtual = 'perfil';
   mostrar(`
     <div class="m-title"><h2>Perfil</h2></div>
     <div class="card rows">
@@ -222,6 +230,32 @@ function telaPerfil() {
   };
   $('p-sair').onclick = async () => { try { await fetch('/api/logout', { method: 'POST' }); } catch {} telaLogin(); };
 }
+
+// ---------- atualização automática ----------
+// Em "Minhas despesas" e no detalhe, busca as despesas de novo a cada 30 s (só com o app visível)
+// e ao voltar para o app, para o status Aprovada/Recusada aparecer sem recarregar a página.
+// Não redesenha enquanto o filtro de mês está aberto.
+let atualizando = false;
+async function atualizarSozinho() {
+  if (!me || atualizando || document.hidden || !['inicio', 'detalhe'].includes(telaAtual)) return;
+  if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+  atualizando = true;
+  try {
+    const novas = await api('/api/despesas');
+    if (JSON.stringify(novas) === JSON.stringify(despesas)) return;
+    const y = window.scrollY;
+    if (telaAtual === 'inicio') await telaInicio(novas);
+    else if (telaAtual === 'detalhe') {
+      despesas = novas;
+      const d = novas.find(x => x.id === detalheId);
+      if (d) telaDetalhe(d); else await telaInicio(novas);
+    }
+    window.scrollTo(0, y);
+  } catch { /* sem conexão: tenta de novo na próxima vez */ }
+  finally { atualizando = false; }
+}
+setInterval(atualizarSozinho, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 
 // ---------- início ----------
 async function iniciar() {
