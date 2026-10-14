@@ -2,7 +2,6 @@ require('dotenv').config({ quiet: true });
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const session = require('express-session');
 const { criarStore, novoId, paraNumero } = require('./services/store');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -42,13 +41,39 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '30kb' }));
 app.use((req, res, next) => { if (!req.body || typeof req.body !== 'object') req.body = {}; next(); });
-app.use(session({
-  name: 'ajudacusto.sid',
-  secret: process.env.SESSION_SECRET || 'dev-secret-troque',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 1000 * 60 * 60 * 12 },
-}));
+
+// ---------------- sessão ----------------
+// A sessão fica num cookie assinado (HMAC com o SESSION_SECRET), e não na memória do servidor.
+// Assim ninguém é deslogado quando o Render "dorme" ou reinicia. O cookie não leva senha nem hash:
+// só o ID, a validade e uma "versão" da senha, que muda quando a senha é trocada (isso derruba as sessões antigas).
+const SEGREDO = process.env.SESSION_SECRET || 'dev-secret-troque';
+const COOKIE = 'ajudacusto.s';
+const DURACAO_MS = 12 * 60 * 60 * 1000;
+const hmac = txt => crypto.createHmac('sha256', SEGREDO).update(txt).digest('base64url');
+const versaoSenha = hash => hmac('v:' + hash).slice(0, 16);
+const versaoAdmin = () => versaoSenha('admin:' + (process.env.ADMIN_USER || 'admin') + '\n' + (process.env.ADMIN_PASSWORD || 'admin'));
+
+function lerSessao(req) {
+  const bruto = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='));
+  if (!bruto) return {};
+  const [dados, assinatura] = bruto.slice(COOKIE.length + 1).split('.');
+  if (!dados || !assinatura || !iguais(assinatura, hmac(dados))) return {};
+  try {
+    const s = JSON.parse(Buffer.from(dados, 'base64url').toString());
+    const agora = Date.now();
+    if (!(s.ce > agora)) { delete s.c; delete s.cv; delete s.ce; }
+    if (!(s.ae > agora)) { delete s.a; delete s.av; delete s.ae; }
+    return s;
+  } catch { return {}; }
+}
+function gravarSessao(res, s) {
+  const fim = Math.max(s.ce || 0, s.ae || 0);
+  const flags = `; Path=/; HttpOnly; SameSite=Lax${PROD ? '; Secure' : ''}`;
+  if (fim <= Date.now()) return res.append('Set-Cookie', `${COOKIE}=; Max-Age=0${flags}`);
+  const dados = Buffer.from(JSON.stringify(s)).toString('base64url');
+  res.append('Set-Cookie', `${COOKIE}=${dados}.${hmac(dados)}; Max-Age=${Math.floor((fim - Date.now()) / 1000)}${flags}`);
+}
+app.use((req, res, next) => { req.sessao = lerSessao(req); next(); });
 
 // ---------------- utilitários ----------------
 const hojeSP = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
@@ -96,24 +121,25 @@ setInterval(() => {
   for (const [k, t] of tentativas) if (!t.ate || t.ate < agora) tentativas.delete(k);
 }, 60 * 60 * 1000).unref();
 
-function entrar(req, res, campos) {
-  req.session.regenerate(err => {
-    if (err) return erro(res, 'Erro ao iniciar sessão.', 500);
-    Object.assign(req.session, campos);
-    res.json({ ok: true });
-  });
-}
+const sairColab = s => { delete s.c; delete s.cv; delete s.ce; };
+const sairAdmin = s => { delete s.a; delete s.av; delete s.ae; };
 
 // ---------------- autenticação ----------------
 const exigeColab = wrap(async (req, res, next) => {
-  const id = req.session.colaboradorId;
-  if (!id) return erro(res, 'Faça login.', 401);
-  const c = (await store.list('Colaboradores')).find(x => x.id === id);
-  if (!c || !c.ativo) { req.session.colaboradorId = null; return erro(res, 'Acesso desativado.', 401); }
+  const s = req.sessao;
+  if (!s.c) return erro(res, 'Faça login.', 401);
+  const c = (await store.list('Colaboradores')).find(x => x.id === s.c);
+  const motivo = !c || !c.ativo ? 'Acesso desativado.' : s.cv !== versaoSenha(c.senhaHash) ? 'Sua senha foi alterada. Entre novamente.' : '';
+  if (motivo) { sairColab(s); gravarSessao(res, s); return erro(res, motivo, 401); }
   req.colab = c;
   next();
 });
-const exigeAdmin = (req, res, next) => (req.session.admin ? next() : erro(res, 'Faça login.', 401));
+const exigeAdmin = (req, res, next) => {
+  const s = req.sessao;
+  if (s.a && s.av === versaoAdmin()) return next();
+  if (s.a) { sairAdmin(s); gravarSessao(res, s); }
+  erro(res, 'Faça login.', 401);
+};
 
 // ---------------- público ----------------
 app.get('/health', (req, res) => res.json({ ok: true, armazenamento: store.modo }));
@@ -127,9 +153,11 @@ app.post('/api/login', wrap(async (req, res) => {
   const c = (await store.list('Colaboradores')).find(x => x.usuario === usuario && x.ativo);
   if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave);
-  entrar(req, res, { colaboradorId: c.id });
+  Object.assign(req.sessao, { c: c.id, cv: versaoSenha(c.senhaHash), ce: Date.now() + DURACAO_MS });
+  gravarSessao(res, req.sessao);
+  res.json({ ok: true });
 }));
-app.post('/api/logout', (req, res) => { req.session.colaboradorId = null; res.json({ ok: true }); });
+app.post('/api/logout', (req, res) => { sairColab(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
 
 app.get('/api/me', exigeColab, (req, res) => res.json(publicoColab(req.colab)));
 
@@ -137,7 +165,11 @@ app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
   const nova = String(req.body.nova ?? '');
   if (!confereSenha(req.body.atual, req.colab.senhaHash)) return erro(res, 'A senha atual não confere.');
   if (nova.length < 6) return erro(res, 'A nova senha precisa ter pelo menos 6 caracteres.');
-  await store.update('Colaboradores', req.colab.id, { senhaHash: hashSenha(nova) });
+  const senhaHash = hashSenha(nova);
+  await store.update('Colaboradores', req.colab.id, { senhaHash });
+  // Mantém este aparelho logado; outros aparelhos com a senha antiga são desconectados
+  req.sessao.cv = versaoSenha(senhaHash);
+  gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
 
@@ -183,9 +215,11 @@ app.post('/api/admin/login', (req, res) => {
     && iguais(String(req.body.senha ?? ''), process.env.ADMIN_PASSWORD || 'admin');
   if (!ok) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave);
-  entrar(req, res, { admin: true });
+  Object.assign(req.sessao, { a: 1, av: versaoAdmin(), ae: Date.now() + DURACAO_MS });
+  gravarSessao(res, req.sessao);
+  res.json({ ok: true });
 });
-app.post('/api/admin/logout', (req, res) => { req.session.admin = false; res.json({ ok: true }); });
+app.post('/api/admin/logout', (req, res) => { sairAdmin(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
 app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }));
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela

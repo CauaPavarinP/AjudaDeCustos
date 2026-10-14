@@ -77,16 +77,12 @@ const optsAno = sel => anos().map(a => opt(a, a, sel)).join('');
 const optsMes = (sel, todos = true) => (todos ? opt('', 'Todos', sel) : '') + MESES.map((m, i) => opt(String(i + 1).padStart(2, '0'), m, sel)).join('');
 const corFuncao = f => CORES_FUNCAO[Math.max(0, D.funcoes.indexOf(f)) % CORES_FUNCAO.length];
 
-function exportarCSV(nome, cab, linhasCSV) {
-  const c = v => { let s = String(v ?? ''); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-  const txt = '﻿' + [cab, ...linhasCSV].map(l => l.map(c).join(';')).join('\r\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' }));
-  a.download = nome + '.csv';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-const n2 = v => (v || 0).toFixed(2).replace('.', ',');
+// Exportação para Excel (.xlsx): ver public/xlsx.js. A última linha (total) sai em negrito.
+const col = (titulo, largura = 14, moeda = false) => ({ titulo, largura, moeda });
+const colsCat = () => [...CAT.map(c => col(c.nome, 13, true)), col('Total', 13, true)];
+const n2 = v => r2(v || 0);
+const mesTxt = ym => ym.slice(5) + '/' + ym.slice(0, 4);
+function exportar(nome, aba, colunas, linhas) { baixarXlsx(nome, [{ nome: aba, colunas, linhas, totalNoFim: true }]); }
 
 // ---------- modal ----------
 function abrirModal(html) { $('modal').innerHTML = `<div class="card modal">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
@@ -169,10 +165,10 @@ function telaLancamentos() {
     if (r.origem === 'painel') location.hash = '#nova/' + r.id;
     else modalDespesasApp(r);
   }));
-  $('l-exp').addEventListener('click', () => exportarCSV(`lancamentos-${f.ano}${f.mes ? '-' + f.mes : ''}`,
-    ['Colaborador', 'Função', 'Data inicial', 'Data final', 'Mês ref.', ...CAT.map(c => c.nome), 'Total', 'Observação', 'Origem'],
-    [...rows.map(r => [r.colaborador, r.funcao, dmy(r.dataInicial), dmy(r.dataFinal), r.mesRef.slice(5) + '/' + r.mesRef.slice(0, 4), ...CAT.map(c => n2(r.valores[c.chave])), n2(r.total), r.observacao, r.origem === 'app' ? 'App' : 'Painel']),
-      ['Total', '', '', '', '', ...CAT.map(c => n2(s.v[c.chave])), n2(s.total), '', '']]));
+  $('l-exp').addEventListener('click', () => exportar(`lancamentos-${f.ano}${f.mes ? '-' + f.mes : ''}`, 'Lançamentos',
+    [col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Origem', 9)],
+    [...rows.map(r => [r.colaborador, r.funcao, dmy(r.dataInicial), dmy(r.dataFinal), mesTxt(r.mesRef), ...CAT.map(c => n2(r.valores[c.chave])), n2(r.total), r.observacao, r.origem === 'app' ? 'App' : 'Painel']),
+      ['Total ' + periodo, '', '', '', '', ...CAT.map(c => n2(s.v[c.chave])), n2(s.total), '', '']]));
 }
 
 function modalDespesasApp(r) {
@@ -185,11 +181,27 @@ function modalDespesasApp(r) {
 
 // ======================= 02 · NOVA PRESTAÇÃO =======================
 function mascaraDinheiro(input, onChange) {
+  // O valor é digitado como numa calculadora (centavos primeiro): cada dígito entra no fim
+  // e "apagar" tira o último dígito, não importa onde esteja o cursor.
   const pinta = () => { const c = Number(input.dataset.c || 0); input.value = 'R$ ' + fmt(c / 100); };
-  input.addEventListener('input', () => {
-    input.dataset.c = String(Number(input.value.replace(/\D/g, '').slice(-9) || 0));
-    pinta(); onChange && onChange();
+  const fim = () => setTimeout(() => input.setSelectionRange(input.value.length, input.value.length));
+  const muda = c => { input.dataset.c = String(c); pinta(); fim(); onChange && onChange(); };
+  input.addEventListener('beforeinput', e => {
+    const c = Number(input.dataset.c || 0);
+    const tudo = input.selectionStart === 0 && input.selectionEnd === input.value.length;
+    if (e.inputType === 'insertText') {
+      e.preventDefault();
+      const d = String(e.data || '').replace(/\D/g, '');
+      if (d) muda(Number(((tudo ? '' : String(c)) + d).slice(-9)));
+    } else if (e.inputType.startsWith('delete')) {
+      e.preventDefault();
+      muda(tudo ? 0 : Math.floor(c / 10));
+    }
   });
+  // Colar e outros casos: usa todos os dígitos do campo
+  input.addEventListener('input', () => muda(Number(input.value.replace(/\D/g, '').slice(-9) || 0)));
+  input.addEventListener('focus', fim);
+  input.addEventListener('click', fim);
   pinta();
 }
 function mesesEntre(a, b) {
@@ -326,8 +338,8 @@ function telaColaborador() {
 
   $('c-colab').addEventListener('change', e => { f.colab = e.target.value; telaColaborador(); });
   $('c-ano').addEventListener('change', e => { f.ano = e.target.value; telaColaborador(); });
-  $('c-exp').addEventListener('click', () => exportarCSV(`resumo-${semAcento(colab ? colab.nome : 'colaborador').replace(/\W+/g, '-')}-${f.ano}`,
-    ['Mês', ...CAT.map(c => c.nome), 'Total'],
+  $('c-exp').addEventListener('click', () => exportar(`resumo-${semAcento(colab ? colab.nome : 'colaborador').replace(/\W+/g, '-')}-${f.ano}`, colab ? colab.nome : 'Resumo',
+    [col('Mês', 14), ...colsCat()],
     [...porMes.map((m, i) => [MESES[i], ...CAT.map(c => n2(m.v[c.chave])), n2(m.total)]), ['Total ' + f.ano, ...CAT.map(c => n2(s.v[c.chave])), n2(s.total)]]));
 }
 
@@ -374,8 +386,8 @@ function telaFuncao() {
     </table></div></div>`;
 
   [['f-ano', 'ano'], ['f-mes', 'mes'], ['f-func', 'funcao']].forEach(([id, k]) => $(id).addEventListener('change', e => { f[k] = e.target.value; telaFuncao(); }));
-  $('f-exp').addEventListener('click', () => exportarCSV(`resumo-funcao-${f.ano}${f.mes ? '-' + f.mes : ''}`,
-    ['Colaborador', 'Função', ...CAT.map(c => c.nome), 'Total'],
+  $('f-exp').addEventListener('click', () => exportar(`resumo-funcao-${f.ano}${f.mes ? '-' + f.mes : ''}`, 'Resumo por função',
+    [col('Colaborador', 26), col('Função', 14), ...colsCat()],
     [...porColab.map(r => [r.nome, r.funcao, ...CAT.map(c => n2(r.v[c.chave])), n2(r.total)]), ['Total', '', ...CAT.map(c => n2(s.v[c.chave])), n2(s.total)]]));
 }
 
@@ -383,7 +395,7 @@ function telaFuncao() {
 function telaColaboradores() {
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Colaboradores</h1><p>Cadastro de quem presta contas — evita nomes digitados de jeitos diferentes</p></div>
-      <div class="acts"><button class="btn" id="k-novo">+ Novo colaborador</button></div></div>
+      <div class="acts"><button class="btn secondary" id="k-backup" title="Baixa todos os dados (sem senhas) em um arquivo Excel">Baixar backup</button><button class="btn" id="k-novo">+ Novo colaborador</button></div></div>
     <div class="card filters"><span class="muted small">Funções cadastradas</span>
       <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}</span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
     <div class="card table-card"><div class="table-wrap"><table>
@@ -399,6 +411,7 @@ function telaColaboradores() {
     </table></div></div>`;
 
   $('k-novo').onclick = () => modalColab();
+  $('k-backup').onclick = baixarBackup;
   $('k-funcao').onclick = modalFuncao;
   const acha = id => D.colaboradores.find(c => c.id === id);
   document.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => modalColab(acha(b.dataset.ed)));
@@ -413,6 +426,21 @@ function telaColaboradores() {
   };
   document.querySelectorAll('[data-off]').forEach(b => { const c = acha(b.dataset.off); b.onclick = ativo(c.id, false, `Desativar ${c.nome}? Ele não consegue mais entrar no app. O histórico continua nos resumos.`); });
   document.querySelectorAll('[data-on]').forEach(b => { const c = acha(b.dataset.on); b.onclick = ativo(c.id, true, `Reativar ${c.nome}?`); });
+}
+
+// Backup: todas as abas da planilha num .xlsx (o painel nunca recebe as senhas)
+function baixarBackup() {
+  const sim = b => (b ? 'Sim' : 'Não');
+  const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
+  baixarXlsx(`backup-ajuda-de-custo-${hoje()}`, [
+    { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Ativo', 7), col('Criado em', 18)],
+      linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, sim(c.ativo), quando(c.criadoEm)]) },
+    { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
+    { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18)],
+      linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm)]) },
+    { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14)],
+      linhas: D.despesas.map(d => [d.id, d.colaborador, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor]) },
+  ]);
 }
 
 function modalColab(c) {

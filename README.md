@@ -7,14 +7,16 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 | Quem | Endereço | O que faz |
 |---|---|---|
 | Colaborador | `/` | Entra com **usuário + senha**, lança despesas (categoria, valor, data e observação), acompanha o status (*Em análise*, *Aprovada*, *Recusada*) e troca a senha em Perfil. |
-| Maurício | `/admin` | Lança prestações de contas, aprova ou recusa as despesas do celular, vê os resumos por colaborador e por função, exporta para Excel (CSV) e cadastra colaboradores e funções. |
+| Maurício | `/admin` | Lança prestações de contas, aprova ou recusa as despesas do celular, vê os resumos por colaborador e por função, exporta para Excel (.xlsx), baixa backup e cadastra colaboradores e funções. |
 
 - **Categorias:** Combustível, Alimentação, Degustação, Hotel, Transporte e Outros. Em "Outros", a observação é obrigatória.
 - **Despesas do celular:** ficam *Em análise* até o Maurício aprovar. As aprovadas entram nos lançamentos e nos resumos, somadas por colaborador e mês, com a etiqueta **APP**. O colaborador só pode excluir uma despesa enquanto ela está em análise.
 - **Colaboradores:** o Maurício cadastra. A senha inicial é gerada automaticamente e aparece **uma única vez**. Se o colaborador esquecer a senha, o Maurício gera uma nova em "Nova senha". Quem é desativado não entra mais, mas o histórico continua nos resumos.
 - **Função:** cada lançamento guarda a função do colaborador no momento em que foi feito.
 - **Mês de referência:** por padrão, o mês da data inicial (regra final ainda a definir com o Maurício).
-- **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login.
+- **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
+- **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login. Trocar o `SESSION_SECRET` desconecta todo mundo.
+- **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico. Em Colaboradores, "Baixar backup" gera um `.xlsx` com todas as abas (sem as senhas).
 - **Foto da nota:** fase 2 (ainda não guarda comprovante).
 
 ## Dados (Google Sheets)
@@ -73,7 +75,12 @@ Depois, abra `http://localhost:3000` (colaborador) e `http://localhost:3000/admi
 - **Tela em branco ou tela antiga:** recarregue com Ctrl + F5.
 - **Deploy falha com "Variável de ambiente X não definida":** cadastre a variável no Render e faça um novo deploy.
 - **Erro ao acessar a planilha:** confira se ela está compartilhada com a Service Account como Editor e se o `SPREADSHEET_ID` está certo.
-- **Plano gratuito do Render:** o serviço "dorme" depois de um tempo sem uso; o primeiro acesso pode demorar perto de 1 minuto, e quem estava logado precisa entrar de novo.
+- **Plano gratuito do Render:** o serviço "dorme" depois de cerca de 15 minutos sem uso, e o primeiro acesso seguinte pode demorar perto de 1 minuto. Quem estava logado continua logado. Para evitar a demora, dá para usar um serviço externo que acesse `/health` a cada 10 minutos (ex.: UptimeRobot), mas **atenção**: as horas gratuitas do Render são somadas entre todos os serviços gratuitos do workspace, e manter dois serviços acordados o mês inteiro passa do limite. Confira o plano antes de ligar isso.
+
+## Backup
+
+- **Automático do Google:** a planilha guarda o histórico de versões (no Google Sheets: Arquivo → Histórico de versões). Dá para voltar a uma versão anterior se alguém apagar algo por engano.
+- **Manual (recomendado uma vez por mês):** no painel, em Colaboradores, clique em **Baixar backup** e guarde o arquivo em uma pasta da empresa. Ou, na planilha, Arquivo → Fazer uma cópia.
 
 ## Estrutura
 
@@ -84,5 +91,6 @@ public/index.html   app do colaborador (celular)
 public/app.js
 public/admin.html   painel do Maurício
 public/admin.js
+public/xlsx.js      gera os arquivos Excel (.xlsx) no navegador
 public/style.css    estilos das duas partes
 ```
