@@ -88,8 +88,17 @@ app.use((req, res, next) => { req.sessao = lerSessao(req); next(); });
 // ---------------- utilitários ----------------
 const hojeSP = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 // Data AAAA-MM-DD existente e com ano razoável (evita erros de digitação como 07/07/7777)
-const dataValida = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z'))
-  && Number(s.slice(0, 4)) >= 2000 && Number(s.slice(0, 4)) <= new Date().getFullYear() + 1;
+const ANO_MIN = 2000, anoMax = () => new Date().getFullYear() + 1;
+const dataValida = s => !problemaData(s, 'A data');
+// Diz o que está errado na data (vazia, inexistente ou com ano fora do intervalo), ou '' se estiver certa
+function problemaData(s, nome) {
+  if (!s) return `Informe ${nome.toLowerCase()}.`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s + 'T00:00:00Z'))) return `${nome} é inválida.`;
+  const ano = Number(s.slice(0, 4));
+  if (ano < ANO_MIN || ano > anoMax()) return `${nome} está com o ano ${ano}. Use um ano entre ${ANO_MIN} e ${anoMax()}.`;
+  return '';
+}
+const valorMaximoTxt = () => VALOR_MAXIMO.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
 const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const r2 = n => Math.round(n * 100) / 100;
@@ -222,8 +231,9 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const observacao = texto(req.body.observacao, 200);
   if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
   if (!(v > 0)) return erro(res, 'Informe o valor da nota.');
-  if (v > VALOR_MAXIMO) return erro(res, 'Valor muito alto. Confira o que foi digitado.');
-  if (!dataValida(data)) return erro(res, 'Data inválida.');
+  if (v > VALOR_MAXIMO) return erro(res, `Valor muito alto (limite de ${valorMaximoTxt()}). Confira o que foi digitado.`);
+  const problema = problemaData(data, 'A data');
+  if (problema) return erro(res, problema);
   if (data > hojeSP()) return erro(res, 'A data não pode ser no futuro.');
   if (categoria === 'Outros' && !observacao) return erro(res, 'Para "Outros", escreva uma observação.');
   const d = {
@@ -375,14 +385,16 @@ async function validarPrestacao(body) {
   const colab = (await store.list('Colaboradores')).find(c => c.id === String(body.colaboradorId || ''));
   if (!colab) return { erro: 'Escolha o colaborador.' };
   const dataInicial = texto(body.dataInicial, 10), dataFinal = texto(body.dataFinal, 10), mesRef = texto(body.mesRef, 7);
-  if (!dataValida(dataInicial) || !dataValida(dataFinal)) return { erro: 'Informe a data inicial e a data final.' };
+  const problema = problemaData(dataInicial, 'A data inicial') || problemaData(dataFinal, 'A data final');
+  if (problema) return { erro: problema };
   if (dataFinal < dataInicial) return { erro: 'A data final não pode ser antes da inicial.' };
   if (!mesValido(mesRef)) return { erro: 'Escolha o mês de referência.' };
   const p = { colaboradorId: colab.id, colaborador: colab.nome, funcao: colab.funcao, dataInicial, dataFinal, mesRef };
   let total = 0;
   for (const c of CATEGORIAS) {
     const v = valor(body[c.chave]);
-    if (v < 0 || v > VALOR_MAXIMO) return { erro: `Valor inválido em ${c.nome}.` };
+    if (v < 0) return { erro: `Valor inválido em ${c.nome}.` };
+    if (v > VALOR_MAXIMO) return { erro: `O valor de ${c.nome} passa do limite de ${valorMaximoTxt()} por categoria. Confira o que foi digitado.` };
     p[c.chave] = v; total += v;
   }
   if (!(total > 0)) return { erro: 'Preencha pelo menos um valor.' };
