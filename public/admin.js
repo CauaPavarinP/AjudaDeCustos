@@ -498,15 +498,50 @@ function modalFuncao() {
 }
 
 // ======================= navegação e login =======================
-function render() {
-  if (!D) return;
-  const [v, arg] = (location.hash.slice(1) || 'lancamentos').split('/');
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === v));
-  fecharModal();
-  window.scrollTo(0, 0);
+const rota = () => (location.hash.slice(1) || 'lancamentos').split('/');
+function desenharTela() {
+  const [v, arg] = rota();
   ({ lancamentos: telaLancamentos, nova: () => telaNova(arg), colaborador: telaColaborador, funcao: telaFuncao, colaboradores: telaColaboradores }[v] || telaLancamentos)();
 }
+function render() {
+  if (!D) return;
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === rota()[0]));
+  fecharModal();
+  window.scrollTo(0, 0);
+  telaDesatualizada = false;
+  desenharTela();
+}
 window.addEventListener('hashchange', render);
+
+// ---------- atualização automática ----------
+// A cada 30 s (só com a aba visível) busca os dados de novo, para as despesas enviadas pelo celular
+// aparecerem sem precisar apertar F5. A tela só é redesenhada quando isso não atrapalha:
+// fora de "Nova prestação", sem janela aberta e sem ninguém digitando num campo.
+const ATUALIZA_MS = 30000;
+let telaDesatualizada = false, atualizando = false;
+function podeRedesenhar() {
+  const ativo = document.activeElement;
+  const digitando = ativo && $('page').contains(ativo) && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName);
+  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !digitando;
+}
+async function atualizarSozinho() {
+  if (!D || atualizando || document.hidden) return;
+  atualizando = true;
+  try {
+    const antes = JSON.stringify(D);
+    await carregar();
+    if (JSON.stringify(D) !== antes) telaDesatualizada = true;
+    if (telaDesatualizada && podeRedesenhar()) {
+      const y = window.scrollY;
+      telaDesatualizada = false;
+      desenharTela();
+      window.scrollTo(0, y);
+    }
+  } catch { /* sem conexão ou sessão expirada: tenta de novo na próxima vez */ }
+  finally { atualizando = false; }
+}
+setInterval(atualizarSozinho, ATUALIZA_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 
 function mostrarLogin() { $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden'); }
 async function mostrarPainel(me) {
