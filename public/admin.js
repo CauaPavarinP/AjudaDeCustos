@@ -397,7 +397,7 @@ function telaColaboradores() {
     <div class="page-head"><div><h1>Colaboradores</h1><p>Cadastro de quem presta contas — evita nomes digitados de jeitos diferentes</p></div>
       <div class="acts"><button class="btn secondary" id="k-backup" title="Baixa todos os dados (sem senhas) em um arquivo Excel">Baixar backup</button><button class="btn" id="k-novo">+ Novo colaborador</button></div></div>
     <div class="card filters"><span class="muted small">Funções cadastradas</span>
-      <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}</span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
+      <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}<button class="x" data-delf="${esc(f)}" title="Excluir função" aria-label="Excluir função ${esc(f)}">×</button></span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Status</th><th>Ações</th></tr></thead>
       <tbody>${D.colaboradores.map(c => `<tr class="${c.ativo ? '' : 'off'}">
@@ -406,7 +406,7 @@ function telaColaboradores() {
         <td><span class="badge ${c.ativo ? 'b-green' : 'b-gray'}">${c.ativo ? 'Ativo' : 'Inativo'}</span></td>
         <td><span class="chips">${c.ativo
           ? `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-pw="${esc(c.id)}">Nova senha</button><button class="btn xs" data-off="${esc(c.id)}">Desativar</button>`
-          : `<button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}</span></td></tr>`).join('')
+          : `<button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
         || '<tr class="empty-row"><td colspan="5">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
     </table></div></div>`;
 
@@ -426,6 +426,16 @@ function telaColaboradores() {
   };
   document.querySelectorAll('[data-off]').forEach(b => { const c = acha(b.dataset.off); b.onclick = ativo(c.id, false, `Desativar ${c.nome}? Ele não consegue mais entrar no app. O histórico continua nos resumos.`); });
   document.querySelectorAll('[data-on]').forEach(b => { const c = acha(b.dataset.on); b.onclick = ativo(c.id, true, `Reativar ${c.nome}?`); });
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    const c = acha(b.dataset.del);
+    if (!confirm(`Excluir ${c.nome} do cadastro? Isso não pode ser desfeito.\n\nSó é possível excluir quem ainda não tem nenhum lançamento.`)) return;
+    try { await api('/api/admin/colaboradores/' + encodeURIComponent(c.id), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { alert(e.message); }
+  });
+  document.querySelectorAll('[data-delf]').forEach(b => b.onclick = async () => {
+    const f = b.dataset.delf;
+    if (!confirm(`Excluir a função "${f}"?`)) return;
+    try { await api('/api/admin/funcoes/' + encodeURIComponent(f), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { alert(e.message); }
+  });
 }
 
 // Backup: todas as abas da planilha num .xlsx (o painel nunca recebe as senhas)
@@ -488,15 +498,50 @@ function modalFuncao() {
 }
 
 // ======================= navegação e login =======================
-function render() {
-  if (!D) return;
-  const [v, arg] = (location.hash.slice(1) || 'lancamentos').split('/');
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === v));
-  fecharModal();
-  window.scrollTo(0, 0);
+const rota = () => (location.hash.slice(1) || 'lancamentos').split('/');
+function desenharTela() {
+  const [v, arg] = rota();
   ({ lancamentos: telaLancamentos, nova: () => telaNova(arg), colaborador: telaColaborador, funcao: telaFuncao, colaboradores: telaColaboradores }[v] || telaLancamentos)();
 }
+function render() {
+  if (!D) return;
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === rota()[0]));
+  fecharModal();
+  window.scrollTo(0, 0);
+  telaDesatualizada = false;
+  desenharTela();
+}
 window.addEventListener('hashchange', render);
+
+// ---------- atualização automática ----------
+// A cada 30 s (só com a aba visível) busca os dados de novo, para as despesas enviadas pelo celular
+// aparecerem sem precisar apertar F5. A tela só é redesenhada quando isso não atrapalha:
+// fora de "Nova prestação", sem janela aberta e sem ninguém digitando num campo.
+const ATUALIZA_MS = 30000;
+let telaDesatualizada = false, atualizando = false;
+function podeRedesenhar() {
+  const ativo = document.activeElement;
+  const digitando = ativo && $('page').contains(ativo) && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName);
+  return rota()[0] !== 'nova' && $('modal').classList.contains('hidden') && !digitando;
+}
+async function atualizarSozinho() {
+  if (!D || atualizando || document.hidden) return;
+  atualizando = true;
+  try {
+    const antes = JSON.stringify(D);
+    await carregar();
+    if (JSON.stringify(D) !== antes) telaDesatualizada = true;
+    if (telaDesatualizada && podeRedesenhar()) {
+      const y = window.scrollY;
+      telaDesatualizada = false;
+      desenharTela();
+      window.scrollTo(0, y);
+    }
+  } catch { /* sem conexão ou sessão expirada: tenta de novo na próxima vez */ }
+  finally { atualizando = false; }
+}
+setInterval(atualizarSozinho, ATUALIZA_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 
 function mostrarLogin() { $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden'); }
 async function mostrarPainel(me) {

@@ -11,7 +11,8 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 
 - **Categorias:** Combustível, Alimentação, Degustação, Hotel, Transporte e Outros. Em "Outros", a observação é obrigatória.
 - **Despesas do celular:** ficam *Em análise* até o Maurício aprovar. As aprovadas entram nos lançamentos e nos resumos, somadas por colaborador e mês, com a etiqueta **APP**. O colaborador só pode excluir uma despesa enquanto ela está em análise.
-- **Colaboradores:** o Maurício cadastra. A senha inicial é gerada automaticamente e aparece **uma única vez**. Se o colaborador esquecer a senha, o Maurício gera uma nova em "Nova senha". Quem é desativado não entra mais, mas o histórico continua nos resumos.
+- **Colaboradores:** o Maurício cadastra. A senha inicial é gerada automaticamente e aparece **uma única vez**. Se o colaborador esquecer a senha, o Maurício gera uma nova em "Nova senha". Quem é desativado não entra mais, mas o histórico continua nos resumos. **Excluir** só é permitido para quem ainda não tem nenhum lançamento (cadastro feito por engano); quem tem histórico deve ser desativado.
+- **Funções:** cadastradas e excluídas na tela Colaboradores (o × ao lado do nome). Só dá para excluir uma função que nenhum colaborador usa; os lançamentos antigos guardam o nome da função, então os resumos não mudam.
 - **Função:** cada lançamento guarda a função do colaborador no momento em que foi feito.
 - **Mês de referência:** por padrão, o mês da data inicial (regra final ainda a definir com o Maurício).
 - **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
