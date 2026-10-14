@@ -18,9 +18,18 @@ const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st ===
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '';
 
+// Versão nova no servidor (deploy): o app se recarrega sozinho no próximo momento seguro
+let versaoAberta = '', versaoNova = false;
+function notaVersao(r) {
+  const v = r.headers.get('X-Versao');
+  if (!v) return;
+  if (!versaoAberta) versaoAberta = v; else if (v !== versaoAberta) versaoNova = true;
+}
+
 async function api(url, opts = {}) {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const corpo = await r.json().catch(() => ({}));
+  notaVersao(r);
   if (r.status === 401 && !url.endsWith('/api/login')) {
     telaLogin();
     if (corpo.erro && corpo.erro !== 'Faça login.') erro('l-erro', corpo.erro); // ex.: "Sua senha foi alterada"
@@ -242,6 +251,7 @@ async function atualizarSozinho() {
   atualizando = true;
   try {
     const novas = await api('/api/despesas');
+    if (versaoNova) return location.reload();
     if (JSON.stringify(novas) === JSON.stringify(despesas)) return;
     const y = window.scrollY;
     if (telaAtual === 'inicio') await telaInicio(novas);

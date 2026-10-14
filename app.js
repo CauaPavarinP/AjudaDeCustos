@@ -33,7 +33,11 @@ const store = criarStore(process.env);
 const app = express();
 app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
 app.disable('x-powered-by');
+// Versão no ar: o Render informa o commit do deploy. As telas abertas comparam esse valor
+// e se recarregam sozinhas quando sai uma versão nova (ver "versão nova" em public/*.js).
+const VERSAO = (process.env.RENDER_GIT_COMMIT || String(Date.now())).slice(0, 12);
 app.use((req, res, next) => {
+  res.setHeader('X-Versao', VERSAO);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');

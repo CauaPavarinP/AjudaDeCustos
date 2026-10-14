@@ -23,9 +23,18 @@ const F = {            // filtros de cada tela (ficam guardados ao trocar de tel
   f: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '' },
 };
 
+// Versão nova no servidor (deploy): a página se recarrega sozinha no próximo momento seguro
+let versaoAberta = '', versaoNova = false;
+function notaVersao(r) {
+  const v = r.headers.get('X-Versao');
+  if (!v) return;
+  if (!versaoAberta) versaoAberta = v; else if (v !== versaoAberta) versaoNova = true;
+}
+
 async function api(url, opts = {}) {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const corpo = await r.json().catch(() => ({}));
+  notaVersao(r);
   if (r.status === 401 && !url.endsWith('/login')) { mostrarLogin(); throw new Error('Faça login.'); }
   if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão.');
   return corpo;
@@ -541,6 +550,8 @@ async function atualizarSozinho() {
   try {
     const antes = JSON.stringify(D);
     await carregar();
+    const ativo = document.activeElement;
+    if (versaoNova && podeRedesenhar() && !(ativo && /^(INPUT|TEXTAREA)$/.test(ativo.tagName))) return location.reload();
     if (JSON.stringify(D) !== antes) telaDesatualizada = true;
     if (telaDesatualizada && podeRedesenhar()) {
       telaDesatualizada = false;
