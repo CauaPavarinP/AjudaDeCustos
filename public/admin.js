@@ -613,7 +613,7 @@ function telaFuncao() {
 function telaColaboradores() {
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Colaboradores</h1><p>Cadastro de quem presta contas — evita nomes digitados de jeitos diferentes</p></div>
-      <div class="acts"><button class="btn secondary" id="k-backup" title="Baixa todos os dados (sem senhas) em um arquivo Excel">Baixar backup</button><button class="btn" id="k-novo">+ Novo colaborador</button></div></div>
+      <div class="acts"><button class="btn" id="k-novo">+ Novo colaborador</button></div></div>
     <div class="card filters"><span class="muted small">Funções cadastradas</span>
       <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}<button class="x" data-delf="${esc(f)}" title="Excluir função" aria-label="Excluir função ${esc(f)}">×</button></span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
     <div class="card table-card"><div class="table-wrap"><table>
@@ -629,7 +629,6 @@ function telaColaboradores() {
     </table></div></div>`;
 
   $('k-novo').onclick = () => modalColab();
-  $('k-backup').onclick = baixarBackup;
   $('k-funcao').onclick = modalFuncao;
   const acha = id => D.colaboradores.find(c => c.id === id);
   document.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => modalColab(acha(b.dataset.ed)));
@@ -788,6 +787,7 @@ $('v-login').addEventListener('submit', async e => {
     await mostrarPainel(await api('/api/admin/me'));
   } catch (err) { $('a-erro').textContent = err.message; $('a-erro').classList.remove('hidden'); }
 });
+$('b-backup').addEventListener('click', baixarBackup);
 $('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} D = null; mostrarLogin(); });
 
 (async () => {
