@@ -1,0 +1,184 @@
+// Testes automáticos do sistema. Rode com: npm test   (no Windows: npm.cmd test)
+//
+// Sobem o servidor numa porta separada, SEMPRE em memória: as variáveis do Google, do Cloudinary e de
+// produção são zeradas abaixo, então nada é gravado na planilha real nem no Cloudinary, mesmo que exista
+// um arquivo .env com as credenciais.
+
+const { test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
+const path = require('node:path');
+const { paraNumero } = require('../services/store');
+const { lerDataUrl, assinar } = require('../services/fotos');
+
+const PORTA = 3900 + Math.floor(Math.random() * 90);
+const B = `http://localhost:${PORTA}`;
+let servidor;
+
+before(async () => {
+  const env = {
+    ...process.env, PORT: String(PORTA),
+    // vazias de propósito: o dotenv não sobrescreve variáveis já definidas
+    NODE_ENV: '', SPREADSHEET_ID: '', GOOGLE_SERVICE_ACCOUNT_EMAIL: '', GOOGLE_PRIVATE_KEY: '',
+    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '',
+  };
+  servidor = spawn(process.execPath, [path.join(__dirname, '..', 'app.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  await new Promise((ok, falha) => {
+    const t = setTimeout(() => falha(new Error('O servidor não subiu em 10 s')), 10000);
+    servidor.stdout.on('data', d => { if (String(d).includes('rodando')) { clearTimeout(t); ok(); } });
+    servidor.on('exit', c => falha(new Error('O servidor parou (código ' + c + ')')));
+  });
+});
+after(() => servidor && servidor.kill());
+
+// Cliente simples que guarda o cookie de sessão (como um navegador)
+function cliente() {
+  let cookie = '';
+  const chamar = async (metodo, url, corpo) => {
+    const r = await fetch(B + url, {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+      body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    });
+    const novo = r.headers.get('set-cookie');
+    if (novo) cookie = novo.split(';')[0].endsWith('=') ? '' : novo.split(';')[0];
+    const tipo = r.headers.get('content-type') || '';
+    const dados = tipo.includes('json') ? await r.json() : Buffer.from(await r.arrayBuffer());
+    return { status: r.status, dados, headers: r.headers };
+  };
+  return {
+    get: url => chamar('GET', url), post: (url, c) => chamar('POST', url, c || {}),
+    put: (url, c) => chamar('PUT', url, c || {}), del: url => chamar('DELETE', url),
+    setCookie: c => { cookie = c; }, get cookie() { return cookie; },
+  };
+}
+const fotoFake = () => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7)]).toString('base64');
+const ontem = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+async function adminLogado() {
+  const a = cliente();
+  assert.equal((await a.post('/api/admin/login', { usuario: 'admin', senha: 'admin' })).status, 200);
+  return a;
+}
+let seq = 0;
+async function novoColaborador(a, funcao = 'Vendedor') {
+  const usuario = 'teste' + (++seq) + Date.now().toString(36);
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Colab ' + usuario, usuario, funcao });
+  assert.equal(r.status, 201, JSON.stringify(r.dados));
+  const c = cliente();
+  assert.equal((await c.post('/api/login', { usuario, senha: r.dados.senhaTemporaria })).status, 200);
+  return { c, id: r.dados.id, usuario, senha: r.dados.senhaTemporaria };
+}
+
+// ---------------- funções puras ----------------
+test('paraNumero entende ponto e vírgula', () => {
+  assert.equal(paraNumero('186,40'), 186.4);
+  assert.equal(paraNumero('1.234,50'), 1234.5);
+  assert.equal(paraNumero('1,234.50'), 1234.5);
+  assert.equal(paraNumero('R$ 12'), 12);
+  assert.equal(paraNumero(''), 0);
+  assert.equal(paraNumero('abc'), 0);
+});
+test('assinatura do Cloudinary segue o formato documentado', () => {
+  // parâmetros em ordem alfabética + segredo, SHA-1
+  const esperado = require('node:crypto').createHash('sha1').update('public_id=a&timestamp=1&type=authenticated' + 'seg').digest('hex');
+  assert.equal(assinar({ type: 'authenticated', timestamp: 1, public_id: 'a' }, 'seg'), esperado);
+});
+test('foto: só aceita JPEG válido', () => {
+  assert.ok(lerDataUrl(fotoFake()).buf);
+  assert.ok(lerDataUrl('data:image/png;base64,AAAA').erro);
+  assert.ok(lerDataUrl('data:image/jpeg;base64,' + Buffer.alloc(300).toString('base64')).erro);
+});
+
+// ---------------- servidor ----------------
+test('health e versão', async () => {
+  const r = await cliente().get('/health');
+  assert.equal(r.dados.armazenamento, 'memoria');
+  assert.ok(r.headers.get('x-versao'));
+});
+
+test('login do painel: senha errada recusa, cookie adulterado não entra', async () => {
+  const x = cliente();
+  assert.equal((await x.post('/api/admin/login', { usuario: 'admin', senha: 'errada' })).status, 401);
+  x.setCookie('ajudacusto.s=eyJhIjoxfQ.assinaturafalsa');
+  assert.equal((await x.get('/api/admin/me')).status, 401);
+  const a = await adminLogado();
+  assert.equal((await a.get('/api/admin/me')).status, 200);
+});
+
+test('cadastro de colaborador: usuário repetido é recusado', async () => {
+  const a = await adminLogado();
+  const { usuario } = await novoColaborador(a);
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Outro', usuario, funcao: 'Vendedor' });
+  assert.equal(r.status, 400);
+});
+
+test('despesa: validações', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const amanha = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Nada', valor: 10 })).status, 400);
+  assert.equal((await c.post('/api/despesas', { data: amanha, categoria: 'Hotel', valor: 10 })).status, 400);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Outros', valor: 10 })).status, 400);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 0 })).status, 400);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 99999 })).status, 400);
+});
+
+test('fluxo completo: envia com foto, aprova, desfaz, exclui', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const outro = (await novoColaborador(a)).c;
+
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 45.5, foto: fotoFake() })).dados;
+  assert.equal(d.status, 'Em análise');
+  assert.equal(d.foto, true, 'a tela recebe só "tem foto", não a referência');
+
+  // foto: dono e painel veem; outro colaborador e anônimo não
+  const f = await c.get(`/api/despesas/${d.id}/foto`);
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('content-type'), 'image/jpeg');
+  assert.equal((await a.get(`/api/admin/despesas/${d.id}/foto`)).status, 200);
+  assert.equal((await outro.get(`/api/despesas/${d.id}/foto`)).status, 404);
+  assert.equal((await cliente().get(`/api/admin/despesas/${d.id}/foto`)).status, 401);
+
+  // aprova -> colaborador não pode mais excluir
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/aprovar`)).dados.status, 'Aprovada');
+  assert.equal((await c.del(`/api/despesas/${d.id}`)).status, 400);
+  // desfaz -> volta para análise -> pode excluir
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/reabrir`)).dados.status, 'Em análise');
+  assert.equal((await c.del(`/api/despesas/${d.id}`)).status, 200);
+  assert.equal((await c.get('/api/despesas')).dados.length, 0);
+});
+
+test('troca de senha desconecta os outros aparelhos', async () => {
+  const a = await adminLogado();
+  const { c, usuario, senha, id } = await novoColaborador(a);
+  const segundo = cliente();
+  await segundo.post('/api/login', { usuario, senha });
+  // o colaborador troca a senha no aparelho 1: ele continua, o aparelho 2 cai
+  assert.equal((await c.post('/api/me/senha', { atual: senha, nova: 'novasenha1' })).status, 200);
+  assert.equal((await c.get('/api/me')).status, 200);
+  assert.equal((await segundo.get('/api/me')).status, 401);
+  // "Nova senha" pelo painel derruba também o aparelho 1
+  await a.put('/api/admin/colaboradores/' + id, { novaSenha: true });
+  assert.equal((await c.get('/api/me')).status, 401);
+});
+
+test('travas de exclusão: colaborador com histórico e função em uso', async () => {
+  const a = await adminLogado();
+  await a.post('/api/admin/funcoes', { nome: 'Função Teste' });
+  const { c, id } = await novoColaborador(a, 'Função Teste');
+  await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 });
+  assert.equal((await a.del('/api/admin/colaboradores/' + id)).status, 400);
+  assert.equal((await a.del('/api/admin/funcoes/' + encodeURIComponent('Função Teste'))).status, 400);
+  // sem histórico: pode excluir
+  const livre = await novoColaborador(a);
+  assert.equal((await a.del('/api/admin/colaboradores/' + livre.id)).status, 200);
+});
+
+test('colaborador desativado perde o acesso na hora', async () => {
+  const a = await adminLogado();
+  const { c, id } = await novoColaborador(a);
+  await a.put('/api/admin/colaboradores/' + id, { ativo: false });
+  assert.equal((await c.get('/api/me')).status, 401);
+});

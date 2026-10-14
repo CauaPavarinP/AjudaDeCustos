@@ -10,7 +10,7 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 | Maurício | `/admin` | Lança prestações de contas, aprova ou recusa as despesas do celular, vê os resumos por colaborador e por função, exporta para Excel (.xlsx), baixa backup e cadastra colaboradores e funções. |
 
 - **Categorias:** Combustível, Alimentação, Degustação, Hotel, Transporte e Outros. Em "Outros", a observação é obrigatória.
-- **Despesas do celular:** ficam *Em análise* até o Maurício aprovar. As aprovadas entram nos lançamentos e nos resumos, somadas por colaborador e mês, com a etiqueta **APP**. O colaborador só pode excluir uma despesa enquanto ela está em análise.
+- **Despesas do celular:** ficam *Em análise* até o Maurício aprovar. A tela "Despesas do celular" do painel lista todas (filtro por status: Em análise, Aprovada, Recusada) e tem **Desfazer**, que volta uma despesa aprovada ou recusada para *Em análise*. As aprovadas entram nos lançamentos e nos resumos, somadas por colaborador e mês, com a etiqueta **APP**. O colaborador só pode excluir uma despesa enquanto ela está em análise.
 - **Colaboradores:** o Maurício cadastra. A senha inicial é gerada automaticamente e aparece **uma única vez**. Se o colaborador esquecer a senha, o Maurício gera uma nova em "Nova senha". Quem é desativado não entra mais, mas o histórico continua nos resumos. **Excluir** só é permitido para quem ainda não tem nenhum lançamento (cadastro feito por engano); quem tem histórico deve ser desativado.
 - **Funções:** cadastradas e excluídas na tela Colaboradores (o × ao lado do nome). Só dá para excluir uma função que nenhum colaborador usa; os lançamentos antigos guardam o nome da função, então os resumos não mudam.
 - **Função:** cada lançamento guarda a função do colaborador no momento em que foi feito.
@@ -61,9 +61,22 @@ Nunca coloque essas informações no código nem no GitHub.
 
 As fotos ficam na pasta `ajuda-de-custo` do Cloudinary, em modo privado. Na planilha, a coluna `Foto` da aba `Despesas` guarda só a referência da foto. Sem a variável, o sistema funciona normalmente e o celular mostra "Foto indisponível no momento".
 
+**Segurança das fotos:**
+- O sistema nunca entrega o endereço do Cloudinary para o navegador: o painel e o celular pegam a foto pelo próprio sistema, que confere o login (o colaborador só vê as dele).
+- Sem assinatura, o endereço da foto no Cloudinary não abre. Mas o link **copiado pelo painel do Cloudinary** já vem assinado e abre para qualquer pessoa que o tenha, sem expirar.
+- Por isso: (1) só pessoas autorizadas têm login no Cloudinary; (2) não se compartilha link copiado do painel do Cloudinary — para ver notas, use o sistema.
+
+## App na tela inicial do celular
+
+O site do colaborador pode ser "instalado" como app (ícone próprio, abre sem a barra do navegador):
+- **Android (Chrome):** menu ⋮ → "Adicionar à tela inicial" ou "Instalar app".
+- **iPhone (Safari):** botão Compartilhar → "Adicionar à Tela de Início".
+
+A tela Perfil do app mostra essas instruções enquanto ele não estiver instalado.
+
 ## Rodar localmente
 
-Precisa do **Node.js 22 ou mais novo**.
+Precisa do **Node.js 24** (versão LTS, a mesma usada no Render). A versão 22 também funciona; o `npm install` só mostra um aviso.
 
 ```bash
 npm install          # no Windows/PowerShell: npm.cmd install
@@ -73,6 +86,14 @@ npm run dev          # no Windows/PowerShell: npm.cmd run dev
 Sem `.env`, roda em memória. Para testar com a planilha, copie `.env.example` para `.env` e preencha.
 
 Depois, abra `http://localhost:3000` (colaborador) e `http://localhost:3000/admin` (painel).
+
+### Testes automáticos
+
+```bash
+npm test             # no Windows/PowerShell: npm.cmd test
+```
+
+Sobem o servidor numa porta separada, **sempre em memória** (ignoram o `.env`: nada é gravado na planilha nem no Cloudinary) e conferem login, despesas, fotos, aprovação, Desfazer, troca de senha e as travas de exclusão. Rode antes de cada `git push`.
 
 ## Publicar no Render
 
@@ -104,5 +125,8 @@ public/app.js
 public/admin.html   painel do Maurício
 public/admin.js
 public/xlsx.js      gera os arquivos Excel (.xlsx) no navegador
+public/dialogo.js   janelas de aviso e confirmação
+public/manifest.webmanifest + public/icons/   app na tela inicial do celular
+test/api.test.js    testes automáticos (npm test)
 public/style.css    estilos das duas partes
 ```

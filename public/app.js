@@ -20,6 +20,9 @@ let telaAtual = '', detalheId = '', fotosLigadas = false;
 const fotoVersao = {}; // muda o endereço da imagem depois de trocar a foto (evita mostrar a antiga do cache)
 const urlFoto = d => `/api/despesas/${encodeURIComponent(d.id)}/foto${fotoVersao[d.id] ? '?v=' + fotoVersao[d.id] : ''}`;
 
+// App aberto pelo ícone da tela inicial (não mostra a dica de instalar)
+const instalado = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
 // ---------- foto da nota ----------
 // A foto é reduzida no próprio celular (até 1600 px, JPEG) antes de enviar: envio rápido e pouca internet.
 function comprimirFoto(arquivo) {
@@ -291,6 +294,9 @@ function telaPerfil() {
     <div id="p-erro" class="alert hidden"></div>
     <div id="p-ok" class="okline hidden">Senha alterada.</div>
     <button class="btn lg block" id="p-salvar">Salvar nova senha</button>
+    ${instalado() ? '' : `<div class="card dica-instalar"><b>📲 Coloque o app na tela inicial</b>
+      <span><b>Android (Chrome):</b> menu ⋮ → "Adicionar à tela inicial" ou "Instalar app".</span>
+      <span><b>iPhone (Safari):</b> botão Compartilhar → "Adicionar à Tela de Início".</span></div>`}
     <button class="btn lg block secondary" id="p-sair">Sair</button>`, 'perfil');
   $('p-salvar').onclick = async () => {
     erro('p-erro', ''); $('p-ok').classList.add('hidden');
