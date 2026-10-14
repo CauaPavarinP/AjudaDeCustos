@@ -20,7 +20,11 @@ let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ulti
 async function api(url, opts = {}) {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const corpo = await r.json().catch(() => ({}));
-  if (r.status === 401 && !url.endsWith('/api/login')) { telaLogin(); throw Object.assign(new Error(corpo.erro || 'Faça login.'), { login: true }); }
+  if (r.status === 401 && !url.endsWith('/api/login')) {
+    telaLogin();
+    if (corpo.erro && corpo.erro !== 'Faça login.') erro('l-erro', corpo.erro); // ex.: "Sua senha foi alterada"
+    throw Object.assign(new Error(corpo.erro || 'Faça login.'), { login: true });
+  }
   if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão. Tente novamente.');
   return corpo;
 }
@@ -114,10 +118,25 @@ function telaNova() {
     document.querySelectorAll('#n-cats .chip').forEach(x => x.classList.toggle('on', x === b));
     $('n-obs-l').textContent = cat === 'Outros' ? 'Observação (obrigatória)' : 'Observação';
   });
-  $('n-valor').addEventListener('input', e => {
-    centavos = Number(e.target.value.replace(/\D/g, '').slice(-9) || 0);
-    e.target.value = centavos ? brl(centavos / 100) : '';
+  // Valor digitado como numa calculadora (centavos primeiro): cada dígito entra no fim
+  // e "apagar" tira o último dígito, não importa onde esteja o cursor.
+  const campoValor = $('n-valor');
+  const fimValor = () => setTimeout(() => campoValor.setSelectionRange(campoValor.value.length, campoValor.value.length));
+  const mudaValor = c => { centavos = c; campoValor.value = c ? brl(c / 100) : ''; fimValor(); };
+  campoValor.addEventListener('beforeinput', e => {
+    const tudo = campoValor.selectionStart === 0 && campoValor.selectionEnd === campoValor.value.length;
+    if (e.inputType === 'insertText') {
+      e.preventDefault();
+      const d = String(e.data || '').replace(/\D/g, '');
+      if (d) mudaValor(Number(((tudo ? '' : String(centavos)) + d).slice(-9)));
+    } else if (e.inputType.startsWith('delete')) {
+      e.preventDefault();
+      mudaValor(tudo ? 0 : Math.floor(centavos / 10));
+    }
   });
+  campoValor.addEventListener('input', e => mudaValor(Number(e.target.value.replace(/\D/g, '').slice(-9) || 0)));
+  campoValor.addEventListener('focus', fimValor);
+  campoValor.addEventListener('click', fimValor);
   $('n-enviar').onclick = async () => {
     erro('n-erro', '');
     if (!cat) return erro('n-erro', 'Escolha a categoria.');
@@ -212,7 +231,7 @@ async function iniciar() {
 }
 iniciar().catch(err => {
   // 401 já leva ao login; qualquer outro erro (servidor fora do ar, sem internet) mostra aviso em vez de tela em branco
-  if (me) return;
+  if (me || err.login) return;
   telaLogin();
-  if (!err.login) erro('l-erro', 'Não foi possível conectar ao servidor. Tente de novo em instantes.');
+  erro('l-erro', 'Não foi possível conectar ao servidor. Tente de novo em instantes.');
 });
