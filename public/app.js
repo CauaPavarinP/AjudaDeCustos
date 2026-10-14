@@ -152,14 +152,13 @@ function telaNova() {
     <div class="field"><label>Categoria</label><div class="chips" id="n-cats">${categorias.map(c => `<button type="button" class="chip" data-cat="${esc(c.nome)}">${esc(c.nome)}</button>`).join('')}</div></div>
     <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label for="n-valor">Valor</label><input class="input" id="n-valor" inputmode="numeric" placeholder="R$ 0,00" autocomplete="off"></div>
-      <div class="field"><label for="n-data">Data</label>${campoData('n-data', hoje(), { min: '2000-01-01', max: hoje() })}</div>
+      <div class="field"><label for="n-data">Data</label><input class="input" id="n-data" type="date" value="${hoje()}" max="${hoje()}"></div>
     </div>
     <div class="field"><label for="n-obs" id="n-obs-l">Observação</label><input class="input" id="n-obs" maxlength="200" placeholder="Ex.: Lavação do veículo"></div>
     <span class="tip">Dica: guarde a nota. O valor precisa ser igual ao da nota.</span>
     <div id="n-erro" class="alert hidden"></div>
     <button class="btn lg block" id="n-enviar">Enviar despesa</button>`, 'nova');
   $('n-voltar').onclick = telaInicio;
-  ligarData('n-data');
   if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro');
   document.querySelectorAll('#n-cats .chip').forEach(b => b.onclick = () => {
     cat = b.dataset.cat;
@@ -191,7 +190,7 @@ function telaNova() {
     if (!centavos) return erro('n-erro', 'Informe o valor da nota.');
     const b = $('n-enviar'); b.disabled = true; b.textContent = foto ? 'Enviando foto...' : 'Enviando...';
     try {
-      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: lerData('n-data'), observacao: $('n-obs').value, foto });
+      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto });
       telaEnviada();
     } catch (err) { erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa'; }
   };
