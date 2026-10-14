@@ -91,6 +91,8 @@ th:last-child, td:last-child { padding-right: 16px; }
 th.num { text-align: right; }
 td.b { font-weight: 600; }
 td.dim { color: #94a3b8; }
+/* observação na tabela de Lançamentos: uma linha, texto inteiro ao passar o mouse */
+td.obs { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tr.click { cursor: pointer; }
 tr.click:hover td { background: #f8fafc; }
 tr.total td { background: #eff6ff; font-weight: 700; border-bottom: 0; }

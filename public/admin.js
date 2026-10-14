@@ -150,15 +150,16 @@ function telaLancamentos() {
       <div class="card kpi"><span class="l">Maior categoria</span><span class="v sm">${maior && maior.v ? `${esc(maior.nome)} · ${brl(maior.v)}` : '—'}</span></div>
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
-      <thead><tr><th>Colaborador</th><th>Função</th><th>Período</th><th>Mês</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th class="num">Total</th></tr></thead>
+      <thead><tr><th>Colaborador</th><th>Função</th><th>Período</th><th>Mês</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th>Observação</th><th class="num">Total</th></tr></thead>
       <tbody>
         ${rows.map(r => `<tr class="click" data-row="${esc(r.id)}">
           <td class="b">${esc(r.colaborador)}${r.origem === 'app' ? '<span class="tag-app">APP</span>' : ''}${r.fotos ? `<span class="tag-foto" title="${r.fotos} comprovante(s)">📎${r.fotos}</span>` : ''}</td><td>${esc(r.funcao)}</td>
           <td class="num" style="text-align:left">${dm(r.dataInicial)} a ${dmy(r.dataFinal)}</td><td>${r.mesRef.slice(5)}</td>
           ${CAT.map(c => `<td class="num${r.valores[c.chave] ? '' : ' dim'}">${cel(r.valores[c.chave])}</td>`).join('')}
+          <td class="obs${r.observacao ? '' : ' dim'}" title="${esc(r.observacao)}">${esc(r.observacao) || '—'}</td>
           <td class="num b">${fmt(r.total)}</td></tr>`).join('')}
-        ${rows.length ? `<tr class="total"><td colspan="4">Total ${esc(periodo)}</td>${CAT.map(c => `<td class="num">${cel(s.v[c.chave])}</td>`).join('')}<td class="num">${fmt(s.total)}</td></tr>`
-          : `<tr class="empty-row"><td colspan="${5 + CAT.length}">Nenhuma prestação para esse filtro.</td></tr>`}
+        ${rows.length ? `<tr class="total"><td colspan="4">Total ${esc(periodo)}</td>${CAT.map(c => `<td class="num">${cel(s.v[c.chave])}</td>`).join('')}<td></td><td class="num">${fmt(s.total)}</td></tr>`
+          : `<tr class="empty-row"><td colspan="${6 + CAT.length}">Nenhuma prestação para esse filtro.</td></tr>`}
       </tbody></table></div></div>
     <p class="muted small" style="margin:0">Clique em uma linha para editar. Linhas com <span class="tag-app" style="margin:0">APP</span> somam as despesas aprovadas que o colaborador lançou pelo celular.</p>`;
 
