@@ -36,6 +36,8 @@ function paraNumero(v) {
   if (typeof v === 'number') return v;
   let s = String(v ?? '').trim().replace(/[R$\s]/g, '');
   if (!s) return 0;
+  // "1.234" ou "1.234.567": ponto como separador de milhar (os valores têm no máximo 2 casas decimais)
+  if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   const dec = s.lastIndexOf(',') > s.lastIndexOf('.') ? ',' : '.';
   if (dec === ',') s = s.replace(/\./g, '').replace(',', '.');
   else if (s.includes(',')) s = s.replace(/,/g, '');
@@ -48,7 +50,7 @@ function deLinha(tabela, o) {
   for (const [k, h] of t.cols) {
     let v = o[h];
     if (t.num && t.num.includes(k)) v = Math.round(paraNumero(v) * 100) / 100;
-    else if (t.bool && t.bool.includes(k)) v = String(v || '').toUpperCase() !== 'NAO';
+    else if (t.bool && t.bool.includes(k)) v = !/^(NAO|NÃO|N|FALSE|FALSO|0)$/i.test(String(v ?? '').trim()); // aceita também o que for digitado à mão
     else v = String(v ?? '');
     r[k] = v;
   }
@@ -118,6 +120,15 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     return rows;
   }
   const acharLinha = async (t, id) => { limpar(t); return (await linhas(t)).find(r => String(r.get('ID')) === id); };
+  // A biblioteca grava e apaga pelo NÚMERO da linha. Se duas operações na mesma aba rodassem juntas,
+  // uma exclusão poderia "empurrar" as linhas e a outra gravaria na linha errada. Por isso as gravações
+  // de cada aba entram numa fila e rodam uma de cada vez (leituras continuam livres).
+  const filas = {};
+  const naFila = (t, tarefa) => {
+    const vez = (filas[t] || Promise.resolve()).then(tarefa, tarefa);
+    filas[t] = vez.catch(() => {});
+    return vez;
+  };
 
   return {
     modo: 'sheets',
@@ -128,13 +139,13 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     async list(t) {
       return (await linhas(t)).map(r => deLinha(t, r.toObject())).filter(o => o.id);
     },
-    async add(t, obj) {
+    add: (t, obj) => naFila(t, async () => {
       // raw: true evita que textos digitados virem fórmulas na planilha
       await doc.sheetsByTitle[t].addRow(paraLinha(t, obj), { raw: true });
       limpar(t);
       return obj;
-    },
-    async update(t, id, campos) {
+    }),
+    update: (t, id, campos) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return null;
       const atual = { ...deLinha(t, row.toObject()), ...campos };
@@ -142,14 +153,14 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       await row.save({ raw: true });
       limpar(t);
       return atual;
-    },
-    async remove(t, id) {
+    }),
+    remove: (t, id) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return false;
       await row.delete();
       limpar(t);
       return true;
-    },
+    }),
   };
 }
 
