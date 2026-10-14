@@ -16,7 +16,54 @@ const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; retur
 const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
-let telaAtual = '', detalheId = '';
+let telaAtual = '', detalheId = '', fotosLigadas = false;
+const fotoVersao = {}; // muda o endereço da imagem depois de trocar a foto (evita mostrar a antiga do cache)
+const urlFoto = d => `/api/despesas/${encodeURIComponent(d.id)}/foto${fotoVersao[d.id] ? '?v=' + fotoVersao[d.id] : ''}`;
+
+// ---------- foto da nota ----------
+// A foto é reduzida no próprio celular (até 1600 px, JPEG) antes de enviar: envio rápido e pouca internet.
+function comprimirFoto(arquivo) {
+  return new Promise((ok, falha) => {
+    const url = URL.createObjectURL(arquivo), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const escala = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * escala); c.height = Math.round(img.naturalHeight * escala);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      let q = 0.75, dados = c.toDataURL('image/jpeg', q);
+      while (dados.length > 1800000 && q > 0.4) { q -= 0.1; dados = c.toDataURL('image/jpeg', q); }
+      ok(dados);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); falha(new Error('Não foi possível abrir esta imagem. Tente outra foto ou use a câmera.')); };
+    img.src = url;
+  });
+}
+// Botões "Tirar foto" (câmera) e "Galeria", com prévia, Trocar e Remover. Chama aoMudar(dataUrl | '').
+function seletorFoto(caixa, aoMudar, idErro) {
+  let atual = '';
+  const desenha = () => {
+    caixa.innerHTML = atual
+      ? `<div class="foto-prev"><img src="${atual}" alt="Foto da nota"></div>
+         <div class="foto-acoes"><button type="button" class="btn secondary" data-f="cam">📷 Trocar</button><button type="button" class="btn secondary" data-f="rem">Remover</button></div>`
+      : `<div class="foto-vazia"><span style="font-size:26px">🧾</span><span>Foto da nota (opcional)</span></div>
+         <div class="foto-acoes"><button type="button" class="btn secondary" data-f="cam">📷 Tirar foto</button><button type="button" class="btn secondary" data-f="gal">🖼️ Galeria</button></div>`;
+    caixa.querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+      if (b.dataset.f === 'rem') { atual = ''; desenha(); return aoMudar(''); }
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*';
+      if (b.dataset.f === 'cam') inp.setAttribute('capture', 'environment'); // abre a câmera traseira no celular
+      inp.onchange = async () => {
+        const arq = inp.files && inp.files[0];
+        if (!arq) return;
+        erro(idErro, '');
+        try { atual = await comprimirFoto(arq); desenha(); aoMudar(atual); } catch (e) { erro(idErro, e.message); }
+      };
+      inp.click();
+    });
+  };
+  desenha();
+}
 
 // Versão nova no servidor (deploy): o app se recarrega sozinho no próximo momento seguro
 let versaoAberta = '', versaoNova = false;
@@ -113,10 +160,10 @@ async function telaInicio(recebidas) {
 // ---------- C3 · Nova despesa ----------
 function telaNova() {
   telaAtual = 'nova';
-  let cat = '', centavos = 0;
+  let cat = '', centavos = 0, foto = '';
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
-    <div class="photo"><span style="font-size:28px">📷</span><span>Foto da nota</span><span class="pill">Em breve · fase 2</span></div>
+    ${fotosLigadas ? '<div class="foto-box" id="n-foto"></div>' : '<div class="photo"><span style="font-size:28px">📷</span><span>Foto da nota</span><span class="pill">Indisponível no momento</span></div>'}
     <div class="field"><label>Categoria</label><div class="chips" id="n-cats">${categorias.map(c => `<button type="button" class="chip" data-cat="${esc(c.nome)}">${esc(c.nome)}</button>`).join('')}</div></div>
     <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label for="n-valor">Valor</label><input class="input" id="n-valor" inputmode="numeric" placeholder="R$ 0,00" autocomplete="off"></div>
@@ -127,6 +174,7 @@ function telaNova() {
     <div id="n-erro" class="alert hidden"></div>
     <button class="btn lg block" id="n-enviar">Enviar despesa</button>`, 'nova');
   $('n-voltar').onclick = telaInicio;
+  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro');
   document.querySelectorAll('#n-cats .chip').forEach(b => b.onclick = () => {
     cat = b.dataset.cat;
     document.querySelectorAll('#n-cats .chip').forEach(x => x.classList.toggle('on', x === b));
@@ -155,9 +203,9 @@ function telaNova() {
     erro('n-erro', '');
     if (!cat) return erro('n-erro', 'Escolha a categoria.');
     if (!centavos) return erro('n-erro', 'Informe o valor da nota.');
-    const b = $('n-enviar'); b.disabled = true; b.textContent = 'Enviando...';
+    const b = $('n-enviar'); b.disabled = true; b.textContent = foto ? 'Enviando foto...' : 'Enviando...';
     try {
-      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value });
+      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto });
       telaEnviada();
     } catch (err) { erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa'; }
   };
@@ -170,7 +218,7 @@ function telaEnviada() {
   mostrar(`
     <div class="success"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
     <div class="center"><h2 style="margin:0 0 6px;font-size:20px">Despesa enviada!</h2>
-      <p style="margin:0 0 10px;font-size:13px">${brl(d.valor)} · ${esc(d.categoria)} · ${dmy(d.data)}</p>
+      <p style="margin:0 0 10px;font-size:13px">${brl(d.valor)} · ${esc(d.categoria)} · ${dmy(d.data)}${d.foto ? ' · 📷 com foto' : ''}</p>
       <p class="muted small" style="margin:0">Ela fica "Em análise" até o Maurício aprovar.<br>Você acompanha tudo em Minhas despesas.</p></div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
       <button class="btn lg block" id="o-ver">Ver minhas despesas</button>
@@ -190,7 +238,13 @@ function telaDetalhe(d) {
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
-    <div class="photo light"><span style="font-size:28px">🧾</span><span>Foto da nota · fase 2</span></div>
+    ${d.foto
+    ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
+       <span class="tip center">Toque na foto para ampliar.</span>`
+    : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
+    ${d.status === 'Em análise' && fotosLigadas
+    ? (d.foto ? '<button class="btn block secondary" id="d-trocar">📷 Trocar foto</button><div class="foto-box hidden" id="d-foto"></div>' : '<div class="foto-box" id="d-foto"></div>')
+    : ''}
     <div class="card rows">
       <div><span>Categoria</span><span>${(VISUAL[d.categoria] || ['🧾'])[0]} ${esc(d.categoria)}</span></div>
       <div><span>Valor</span><span>${brl(d.valor)}</span></div>
@@ -199,9 +253,21 @@ function telaDetalhe(d) {
       <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
       <div><span>Status</span><span>${badge(d.status)}</span></div>
     </div>
+    <div id="d-erro-foto" class="alert hidden"></div>
     ${linha}
     ${d.status === 'Em análise' ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
+  if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
+  if ($('d-foto')) seletorFoto($('d-foto'), async f => {
+    if (!f) return;
+    $('d-foto').innerHTML = '<div class="foto-vazia">Enviando foto...</div>';
+    try {
+      const nova = await api('/api/despesas/' + encodeURIComponent(d.id) + '/foto', { method: 'PUT', body: JSON.stringify({ foto: f }) });
+      fotoVersao[d.id] = Date.now();
+      despesas = despesas.map(x => (x.id === nova.id ? nova : x));
+      telaDetalhe(nova);
+    } catch (err) { telaDetalhe(d); erro('d-erro-foto', err.message); }
+  }, 'd-erro-foto');
   if ($('d-excluir')) $('d-excluir').onclick = async () => {
     if (!confirm('Excluir esta despesa?')) return;
     try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); } catch (err) { erro('d-erro', err.message); }
@@ -271,6 +337,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) atua
 async function iniciar() {
   me = await api('/api/me');
   if (!categorias.length) categorias = await api('/api/categorias');
+  try { fotosLigadas = !!(await api('/api/config')).fotos; } catch { fotosLigadas = false; }
   await telaInicio();
 }
 iniciar().catch(err => {

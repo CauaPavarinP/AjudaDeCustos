@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const { criarStore, novoId, paraNumero } = require('./services/store');
+const { criarFotos, lerDataUrl } = require('./services/fotos');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,7 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
 }
 
 const store = criarStore(process.env);
+const fotos = criarFotos(process.env); // null quando o envio de fotos está desligado
 const app = express();
 app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
 app.disable('x-powered-by');
@@ -43,7 +45,10 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   next();
 });
-app.use(express.json({ limit: '30kb' }));
+// Corpo das requisições: 30 KB, exceto nas rotas que recebem a foto da nota (já comprimida no celular)
+const jsonPequeno = express.json({ limit: '30kb' }), jsonComFoto = express.json({ limit: '5mb' });
+const rotaComFoto = req => /^\/api\/despesas(\/[^/]+\/foto)?$/.test(req.path) && req.method !== 'GET';
+app.use((req, res, next) => (rotaComFoto(req) ? jsonComFoto : jsonPequeno)(req, res, next));
 app.use((req, res, next) => { if (!req.body || typeof req.body !== 'object') req.body = {}; next(); });
 
 // ---------------- sessão ----------------
@@ -107,6 +112,7 @@ function senhaTemporaria() {
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
   return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
 }
+const publicoDesp = d => ({ ...d, foto: !!d.foto });
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
 
 // Bloqueio simples contra tentativas de adivinhar senha
@@ -146,8 +152,27 @@ const exigeAdmin = (req, res, next) => {
 };
 
 // ---------------- público ----------------
-app.get('/health', (req, res) => res.json({ ok: true, armazenamento: store.modo }));
+app.get('/health', (req, res) => res.json({ ok: true, armazenamento: store.modo, fotos: fotos ? fotos.modo : 'desligadas' }));
 app.get('/api/categorias', (req, res) => res.json(CATEGORIAS));
+app.get('/api/config', (req, res) => res.json({ fotos: !!fotos }));
+
+// Envia a foto para o armazenamento e devolve a referência (ou um erro para mostrar na tela)
+async function guardarFoto(id, dataUrl) {
+  if (!fotos) return { erro: 'O envio de fotos não está disponível no momento.' };
+  const f = lerDataUrl(dataUrl);
+  if (f.erro) return f;
+  try { return { ref: await fotos.salvar(id, f.buf) }; }
+  catch (e) { console.error('[fotos]', e.message); return { erro: 'Não foi possível enviar a foto. Tente de novo ou envie sem foto.' }; }
+}
+const apagarFoto = ref => { if (fotos && ref) fotos.apagar(ref).catch(e => console.error('[fotos] apagar', e.message)); };
+async function enviarFoto(res, d) {
+  if (!d || !d.foto) return erro(res, 'Esta despesa não tem foto.', 404);
+  if (!fotos) return erro(res, 'Fotos indisponíveis no momento.', 503);
+  try {
+    const buf = await fotos.ler(d.foto);
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600' }).send(buf);
+  } catch (e) { console.error('[fotos] ler', e.message); erro(res, 'Não foi possível carregar a foto.', 502); }
+}
 
 // ================= COLABORADOR (celular) =================
 app.post('/api/login', wrap(async (req, res) => {
@@ -180,7 +205,7 @@ app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
 app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
   const lista = (await store.list('Despesas')).filter(d => d.colaboradorId === req.colab.id)
     .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
-  res.json(lista);
+  res.json(lista.map(publicoDesp));
 }));
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
@@ -197,10 +222,34 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const d = {
     id: novoId(), colaboradorId: req.colab.id, colaborador: req.colab.nome, funcao: req.colab.funcao,
     data, categoria, valor: v, observacao, status: STATUS.analise,
-    criadoEm: new Date().toISOString(), avaliadoEm: '', avaliadoPor: '',
+    criadoEm: new Date().toISOString(), avaliadoEm: '', avaliadoPor: '', foto: '',
   };
-  await store.add('Despesas', d);
-  res.status(201).json(d);
+  if (req.body.foto) {
+    const f = await guardarFoto(d.id, req.body.foto);
+    if (f.erro) return erro(res, f.erro);
+    d.foto = f.ref;
+  }
+  try { await store.add('Despesas', d); }
+  catch (e) { apagarFoto(d.foto); throw e; }
+  res.status(201).json(publicoDesp(d));
+}));
+
+// Foto da despesa: o colaborador vê a própria; pode adicionar ou trocar enquanto está em análise
+const minhaDespesa = async req => (await store.list('Despesas')).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
+app.get('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
+  const d = await minhaDespesa(req);
+  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  enviarFoto(res, d);
+}));
+app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
+  const d = await minhaDespesa(req);
+  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  if (d.status !== STATUS.analise) return erro(res, 'Só dá para mudar a foto enquanto a despesa está em análise.');
+  const f = await guardarFoto(d.id, req.body.foto);
+  if (f.erro) return erro(res, f.erro);
+  const atual = await store.update('Despesas', d.id, { foto: f.ref });
+  apagarFoto(d.foto);
+  res.json(publicoDesp(atual));
 }));
 
 app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
@@ -208,6 +257,7 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
   await store.remove('Despesas', d.id);
+  apagarFoto(d.foto);
   res.json({ ok: true });
 }));
 
@@ -234,7 +284,8 @@ app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
     categorias: CATEGORIAS,
     funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
     colaboradores: colaboradores.map(publicoColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
-    prestacoes, despesas,
+    prestacoes, despesas: despesas.map(publicoDesp),
+    fotos: !!fotos,
   });
 }));
 
@@ -364,8 +415,10 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
     avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
   });
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
-  res.json(d);
+  res.json(publicoDesp(d));
 }));
+app.get('/api/admin/despesas/:id/foto', exigeAdmin, wrap(async (req, res) =>
+  enviarFoto(res, (await store.list('Despesas')).find(x => x.id === req.params.id))));
 
 // ---------------- páginas ----------------
 // no-cache: o navegador sempre confere se há versão nova (evita admin.html antigo com admin.js novo)
@@ -375,6 +428,7 @@ app.get('/admin', (req, res) => { semCache(res); res.sendFile(path.join(__dirnam
 app.use('/api', (req, res) => erro(res, 'Rota não encontrada.', 404));
 
 app.use((err, req, res, next) => {
+  if (err.type === 'entity.too.large') return erro(res, 'Foto muito grande. Tente outra foto.', 413);
   if (err.status >= 400 && err.status < 500) return erro(res, 'Requisição inválida.', err.status);
   console.error('[erro]', err);
   res.status(500).json({ erro: 'Erro interno. Tente novamente.' });
@@ -386,6 +440,6 @@ async function iniciar() {
   if (!(await store.list('Funcoes')).length) {
     for (const nome of FUNCOES_INICIAIS) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
   }
-  app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo})`));
+  app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo}, fotos: ${fotos ? fotos.modo : "desligadas"})`));
 }
 iniciar().catch(err => { console.error('Falha ao iniciar:', err.message); process.exit(1); });
