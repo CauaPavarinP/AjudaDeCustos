@@ -238,3 +238,17 @@ test('paraNumero: milhar com ponto vindo da planilha formatada', () => {
   assert.equal(paraNumero('12.345.678'), 12345678);
   assert.equal(paraNumero('12.5'), 12.5);
 });
+
+test('datas que não existem (31/02, 30/04, 29/02 fora de ano bissexto) são recusadas', async () => {
+  const a = await adminLogado();
+  const { c, id: colaboradorId } = await novoColaborador(a);
+  for (const data of ['2026-02-31', '2026-04-31', '2025-02-29']) {
+    const r = await c.post('/api/despesas', { data, categoria: 'Hotel', valor: 10 });
+    assert.equal(r.status, 400, data);
+    assert.match(r.dados.erro, /não existe/);
+  }
+  const base = { colaboradorId, dataInicial: '2026-02-30', dataFinal: '2026-03-02', mesRef: '2026-02', hotel: 10 };
+  assert.equal((await a.post('/api/admin/prestacoes', base)).status, 400);
+  // 29/02 em ano bissexto existe
+  assert.equal((await a.post('/api/admin/prestacoes', { ...base, dataInicial: '2024-02-29', dataFinal: '2024-03-02', mesRef: '2024-02' })).status, 201);
+});

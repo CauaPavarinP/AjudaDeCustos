@@ -39,6 +39,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 textarea.input { height: auto; min-height: 80px; padding: 10px 12px; resize: vertical; }
 .input:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
 .input[readonly] { background: #f1f5f9; color: var(--muted); }
+/* campo de data dd/mm/aaaa (public/data.js): calendário do aparelho invisível por cima do ícone 📅 */
+.data-br { position: relative; }
+.data-br .input { padding-right: 44px; }
+.data-br .data-icone { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 16px; }
+.data-br .data-nativa { position: absolute; right: 0; top: 0; width: 44px; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px; }
 .alert { background: var(--red-soft); color: var(--red); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 .note { background: var(--amber-soft); color: var(--amber); border: 1px solid #fde68a; border-radius: 8px; padding: 8px 12px; font-size: 12px; }
