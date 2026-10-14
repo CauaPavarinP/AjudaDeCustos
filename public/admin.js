@@ -439,7 +439,8 @@ function telaNova(id) {
   };
   document.querySelectorAll('[data-cat]').forEach(i => mascaraDinheiro(i, total));
   total();
-  const funcao = () => { const c = D.colaboradores.find(x => x.id === $('n-colab').value); $('n-funcao').value = c ? c.funcao : ''; };
+  // Na edição, mostra a função gravada na prestação (a do momento em que foi feita), não a atual do colaborador
+  const funcao = () => { const c = D.colaboradores.find(x => x.id === $('n-colab').value); $('n-funcao').value = p && c && c.id === p.colaboradorId ? p.funcao : c ? c.funcao : ''; };
   $('n-colab').addEventListener('change', funcao); funcao();
   const meses = manter => {
     const atual = manter || $('n-mes').value;

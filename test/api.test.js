@@ -213,3 +213,28 @@ test('prestação: comprovantes (anexar, ver, remover, limite) e data com ano in
   assert.equal((await a.del('/api/admin/prestacoes/' + p.id)).status, 200);
   assert.equal((await a.get(`/api/admin/prestacoes/${p.id}/fotos/0`)).status, 404);
 });
+
+test('prestação: editar mantém nome e função da época; mês fora do período e colaborador desativado são recusados', async () => {
+  const a = await adminLogado();
+  const { id: colaboradorId } = await novoColaborador(a, 'Vendedor');
+  const base = { colaboradorId, dataInicial: '2026-03-02', dataFinal: '2026-03-05', mesRef: '2026-03', hotel: 100 };
+  const p = (await a.post('/api/admin/prestacoes', base)).dados;
+  // o colaborador muda de nome e de função depois
+  await a.put('/api/admin/colaboradores/' + colaboradorId, { nome: 'Nome Novo', usuario: 'nomenovo' + Date.now().toString(36), funcao: 'Promotora' });
+  const editada = (await a.put('/api/admin/prestacoes/' + p.id, { ...base, hotel: 120 })).dados;
+  assert.equal(editada.hotel, 120);
+  assert.equal(editada.funcao, 'Vendedor', 'a função da época continua');
+  assert.equal(editada.colaborador, p.colaborador, 'o nome da época continua');
+  // mês de referência fora do período
+  assert.equal((await a.post('/api/admin/prestacoes', { ...base, mesRef: '2026-11' })).status, 400);
+  // colaborador desativado: não aceita prestação nova, mas a antiga continua editável
+  await a.put('/api/admin/colaboradores/' + colaboradorId, { ativo: false });
+  assert.equal((await a.post('/api/admin/prestacoes', base)).status, 400);
+  assert.equal((await a.put('/api/admin/prestacoes/' + p.id, { ...base, hotel: 130 })).status, 200);
+});
+
+test('paraNumero: milhar com ponto vindo da planilha formatada', () => {
+  assert.equal(paraNumero('1.234'), 1234);
+  assert.equal(paraNumero('12.345.678'), 12345678);
+  assert.equal(paraNumero('12.5'), 12.5);
+});

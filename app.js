@@ -381,15 +381,21 @@ app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => 
 }));
 
 // ---- prestações (lançadas pelo Maurício) ----
-async function validarPrestacao(body) {
+async function validarPrestacao(body, atual) {
   const colab = (await store.list('Colaboradores')).find(c => c.id === String(body.colaboradorId || ''));
   if (!colab) return { erro: 'Escolha o colaborador.' };
+  const mesmoColab = atual && atual.colaboradorId === colab.id;
+  if (!colab.ativo && !mesmoColab) return { erro: `${colab.nome} está desativado. Reative o colaborador para lançar uma prestação nova.` };
   const dataInicial = texto(body.dataInicial, 10), dataFinal = texto(body.dataFinal, 10), mesRef = texto(body.mesRef, 7);
   const problema = problemaData(dataInicial, 'A data inicial') || problemaData(dataFinal, 'A data final');
   if (problema) return { erro: problema };
   if (dataFinal < dataInicial) return { erro: 'A data final não pode ser antes da inicial.' };
   if (!mesValido(mesRef)) return { erro: 'Escolha o mês de referência.' };
-  const p = { colaboradorId: colab.id, colaborador: colab.nome, funcao: colab.funcao, dataInicial, dataFinal, mesRef };
+  if (mesRef < dataInicial.slice(0, 7) || mesRef > dataFinal.slice(0, 7)) return { erro: 'O mês de referência precisa estar dentro do período (entre a data inicial e a final).' };
+  // Editar uma prestação antiga mantém o nome e a função gravados nela (a função "do momento em que foi feita")
+  const p = mesmoColab
+    ? { colaboradorId: colab.id, colaborador: atual.colaborador, funcao: atual.funcao, dataInicial, dataFinal, mesRef }
+    : { colaboradorId: colab.id, colaborador: colab.nome, funcao: colab.funcao, dataInicial, dataFinal, mesRef };
   let total = 0;
   for (const c of CATEGORIAS) {
     const v = valor(body[c.chave]);
@@ -411,7 +417,9 @@ app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
   res.status(201).json(publicoPrest(nova));
 }));
 app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
-  const p = await validarPrestacao(req.body);
+  const anterior = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
+  if (!anterior) return erro(res, 'Prestação não encontrada.', 404);
+  const p = await validarPrestacao(req.body, anterior);
   if (p.erro) return erro(res, p.erro);
   const atual = await store.update('Prestacoes', String(req.params.id), p);
   if (!atual) return erro(res, 'Prestação não encontrada.', 404);
