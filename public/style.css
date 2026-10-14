@@ -24,6 +24,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn.secondary { background: var(--white); color: var(--text); border-color: var(--border-strong); }
 .btn.secondary:hover { background: var(--bg); }
 .btn.danger { background: var(--white); color: var(--red); border-color: #fecaca; }
+.btn.ok { background: var(--green); color: #fff; }
+.btn.ok:hover { background: #166534; }
 .btn.block { width: 100%; }
 .btn.lg { height: 48px; font-size: 15px; border-radius: 10px; }
 .btn.xs { padding: 3px 8px; font-size: 12px; font-weight: 500; border-radius: 6px; background: #f1f5f9; color: var(--text); }
@@ -97,7 +99,7 @@ tr.off td { color: var(--muted); }
 .tag-app { font-size: 10px; font-weight: 600; color: var(--primary); background: var(--primary-soft); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
 .pend { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-color: #fde68a; background: #fffdf5; }
 .pend h3 { margin: 0; font-size: 14px; }
-.pend-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr 2fr auto auto; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
+.pend-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr 2fr auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
 .pend-row .acts { display: flex; gap: 6px; }
 /* nova prestação */
 .form-grid { display: grid; grid-template-columns: 1fr 340px; gap: 18px; align-items: start; }
@@ -202,3 +204,19 @@ tr.off td { color: var(--muted); }
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }
 .okline.amber { background: var(--amber-soft); color: var(--amber); }
 .okline.red { background: var(--red-soft); color: var(--red); }
+/* foto da nota */
+.foto-box { display: flex; flex-direction: column; gap: 8px; }
+.foto-vazia { border: 1.5px dashed var(--border-strong); border-radius: 14px; min-height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12px; background: var(--white); }
+.foto-acoes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.foto-prev { display: block; border-radius: 14px; overflow: hidden; background: #0f172a; }
+.foto-prev img { display: block; width: 100%; max-height: 320px; object-fit: contain; }
+/* painel: analisar a nota */
+.modal.modal-nota { max-width: 980px; }
+.nota-grid { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
+.nota-img { background: #0f172a; border-radius: 10px; height: 70vh; overflow: auto; display: flex; align-items: center; justify-content: center; }
+.nota-img img { max-width: 100%; max-height: 100%; cursor: zoom-in; }
+.nota-img.zoom { display: block; }
+.nota-img.zoom img { max-width: none; max-height: none; cursor: zoom-out; }
+.nota-img .sem { color: #cbd5e1; font-size: 13px; }
+.tag-foto { font-size: 12px; margin-left: 4px; }
+@media (max-width: 760px) { .nota-grid { grid-template-columns: 1fr; } .nota-img { height: 50vh; } }

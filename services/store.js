@@ -23,7 +23,7 @@ const TABELAS = {
   Despesas: {
     cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['funcao', 'Funcao'],
       ['data', 'Data'], ['categoria', 'Categoria'], ['valor', 'Valor'], ['observacao', 'Observacao'], ['status', 'Status'],
-      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor']],
+      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor'], ['foto', 'Foto']],
     num: ['valor'],
   },
 };

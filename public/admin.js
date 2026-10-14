@@ -94,7 +94,7 @@ const mesTxt = ym => ym.slice(5) + '/' + ym.slice(0, 4);
 function exportar(nome, aba, colunas, linhas) { baixarXlsx(nome, [{ nome: aba, colunas, linhas, totalNoFim: true }]); }
 
 // ---------- modal ----------
-function abrirModal(html) { $('modal').innerHTML = `<div class="card modal">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
+function abrirModal(html, classe = '') { $('modal').innerHTML = `<div class="card modal ${classe}">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
 function fecharModal() { $('modal').classList.add('hidden'); $('modal').innerHTML = ''; }
 $('modal').addEventListener('click', e => { if (e.target === $('modal')) fecharModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('modal').classList.contains('hidden')) fecharModal(); });
@@ -133,7 +133,7 @@ function telaLancamentos() {
         <span class="num"><b>${brl(d.valor)}</b></span>
         <span class="muted">${esc(d.observacao) || '—'}</span>
         <span class="acts"><button class="btn xs ok" data-ap="${esc(d.id)}">Aprovar</button><button class="btn xs no" data-rc="${esc(d.id)}">Recusar</button></span>
-        <span></span></div>`).join('')}
+        <span><button class="btn xs" data-nota="${esc(d.id)}" title="${d.foto ? 'Ver a foto da nota e analisar' : 'Esta despesa foi enviada sem foto'}">${d.foto ? '📷 Ver nota' : 'Sem foto'}</button></span></div>`).join('')}
     </div>` : ''}
     <div class="card filters" style="grid-template-columns:110px 150px 1fr 1fr 1.4fr">
       <div class="field"><label>Ano</label><select class="input" id="l-ano">${optsAno(f.ano)}</select></div>
@@ -169,6 +169,7 @@ function telaLancamentos() {
     b.disabled = true;
     try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); await carregar(); telaLancamentos(); } catch (e) { alert(e.message); b.disabled = false; }
   }));
+  document.querySelectorAll('[data-nota]').forEach(b => b.addEventListener('click', () => modalNota(D.despesas.find(d => d.id === b.dataset.nota))));
   document.querySelectorAll('tr[data-row]').forEach(tr => tr.addEventListener('click', () => {
     const r = rows.find(x => x.id === tr.dataset.row);
     if (r.origem === 'painel') location.hash = '#nova/' + r.id;
@@ -183,9 +184,51 @@ function telaLancamentos() {
 function modalDespesasApp(r) {
   const m = abrirModal(`<h3>${esc(r.colaborador)} · despesas do app</h3>
     <p class="muted small" style="margin:0">${nomeMes(r.mesRef)} · somente despesas aprovadas</p>
-    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span>${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}</span><span>${brl(d.valor)}</span></div>`).join('')}</div>
+    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span>${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}${d.foto ? ` <button class="link tag-foto" data-nota="${esc(d.id)}">📷 ver nota</button>` : ''}</span><span>${brl(d.valor)}</span></div>`).join('')}</div>
     <div class="acts"><button class="btn secondary" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = fecharModal;
+  m.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => modalNota(D.despesas.find(d => d.id === b.dataset.nota), () => modalDespesasApp(r)));
+}
+
+// Analisar uma despesa do celular: foto da nota (clique para ampliar) ao lado dos dados, com Aprovar/Recusar
+function modalNota(d, voltar) {
+  if (!d) return;
+  const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '—');
+  const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto';
+  const emAnalise = d.status === 'Em análise';
+  const m = abrirModal(`<h3>Analisar despesa · ${esc(d.colaborador)}</h3>
+    <div class="nota-grid">
+      <div class="nota-img" id="m-img">${d.foto ? `<img src="${url}" alt="Foto da nota" title="Clique para ampliar">` : '<span class="sem">Despesa enviada sem foto da nota.</span>'}</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="rows card">
+          <div><span>Colaborador</span><span>${esc(d.colaborador)}</span></div>
+          <div><span>Função</span><span>${esc(d.funcao)}</span></div>
+          <div><span>Categoria</span><span>${esc(d.categoria)}</span></div>
+          <div><span>Valor</span><span>${brl(d.valor)}</span></div>
+          <div><span>Data da nota</span><span>${dmy(d.data)}</span></div>
+          <div><span>Observação</span><span>${esc(d.observacao) || '—'}</span></div>
+          <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
+          <div><span>Status</span><span>${esc(d.status)}${d.avaliadoEm ? ` · ${quando(d.avaliadoEm)}` : ''}</span></div>
+        </div>
+        ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
+        <span class="muted small">Confira se o valor e a data batem com a nota.</span>
+        ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>' : ''}
+        <button class="btn secondary" id="m-fechar">${voltar ? 'Voltar' : 'Fechar'}</button>
+      </div>
+    </div>`, 'modal-nota');
+  const img = m.querySelector('#m-img img');
+  if (img) {
+    img.onclick = () => m.querySelector('#m-img').classList.toggle('zoom');
+    img.onerror = () => { m.querySelector('#m-img').innerHTML = '<span class="sem">Não foi possível carregar a foto. Tente de novo em instantes.</span>'; };
+  }
+  m.querySelector('#m-fechar').onclick = () => (voltar ? voltar() : fecharModal());
+  const decidir = acao => async e => {
+    if (acao === 'recusar' && !confirm('Recusar essa despesa? O colaborador verá o status "Recusada".')) return;
+    e.currentTarget.disabled = true;
+    try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); fecharModal(); desenharTela(); }
+    catch (err) { alert(err.message); e.currentTarget.disabled = false; }
+  };
+  if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
 }
 
 // ======================= 02 · NOVA PRESTAÇÃO =======================
@@ -457,8 +500,8 @@ function baixarBackup() {
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
     { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18)],
       linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm)]) },
-    { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14)],
-      linhas: D.despesas.map(d => [d.id, d.colaborador, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor]) },
+    { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14), col('Foto', 7)],
+      linhas: D.despesas.map(d => [d.id, d.colaborador, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor, sim(d.foto)]) },
   ]);
 }
 

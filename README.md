@@ -18,7 +18,7 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 - **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
 - **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login. Trocar o `SESSION_SECRET` desconecta todo mundo.
 - **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico. Em Colaboradores, "Baixar backup" gera um `.xlsx` com todas as abas (sem as senhas).
-- **Foto da nota:** fase 2 (ainda não guarda comprovante).
+- **Foto da nota (opcional):** no celular, "Tirar foto" (câmera) ou "Galeria". A foto é reduzida no próprio celular antes de enviar. Enquanto a despesa está em análise, o colaborador pode adicionar ou trocar a foto no detalhe. No painel, "📷 Ver nota" abre a foto (clique para ampliar) ao lado dos dados, com Aprovar e Recusar. As fotos ficam no Cloudinary em modo privado: só abrem pelo sistema, para quem está logado.
 
 ## Dados (Google Sheets)
 
@@ -27,7 +27,7 @@ Crie uma planilha nova e compartilhe com o e-mail da Service Account como **Edit
 - `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm
 - `Funcoes`: ID, Nome, CriadoEm
 - `Prestacoes`: ID, ColaboradorID, Colaborador, Funcao, DataInicial, DataFinal, MesReferencia, Combustivel, Alimentacao, Degustacao, Hotel, Transporte, Outros, Total, Observacao, CriadoEm
-- `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor
+- `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor, Foto (a coluna Foto é criada sozinha em planilhas que já existem)
 
 > Não renomeie as abas nem as colunas, e não edite os IDs nem a coluna SenhaHash à mão.
 
@@ -46,10 +46,20 @@ Veja `.env.example`. No Render, cadastre em **Environment → Environment Variab
 | `SPREADSHEET_ID` | ID da planilha (trecho da URL entre `/d/` e `/edit`) |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | e-mail da Service Account |
 | `GOOGLE_PRIVATE_KEY` | chave privada da Service Account (pode colar com os `\n`) |
+| `CLOUDINARY_URL` | opcional; liga as fotos das notas. Formato `cloudinary://API_KEY:API_SECRET@CLOUD_NAME` (veja abaixo) |
 
 Em produção, o servidor não sobe se faltar alguma delas e mostra no log qual está faltando.
 
 Nunca coloque essas informações no código nem no GitHub.
+
+## Fotos das notas (Cloudinary)
+
+1. Crie uma conta gratuita em [cloudinary.com](https://cloudinary.com).
+2. No painel do Cloudinary, copie o **API environment variable** (começa com `cloudinary://`). Ele aparece na página de API Keys / Dashboard.
+3. No Render, cadastre a variável `CLOUDINARY_URL` com esse valor (sem o `CLOUDINARY_URL=` da frente, se vier junto).
+4. Depois do deploy, `/health` deve mostrar `"fotos":"cloudinary"`.
+
+As fotos ficam na pasta `ajuda-de-custo` do Cloudinary, em modo privado. Na planilha, a coluna `Foto` da aba `Despesas` guarda só a referência da foto. Sem a variável, o sistema funciona normalmente e o celular mostra "Foto indisponível no momento".
 
 ## Rodar localmente
 
@@ -88,6 +98,7 @@ Depois, abra `http://localhost:3000` (colaborador) e `http://localhost:3000/admi
 ```
 app.js              servidor Express: login, APIs do colaborador e do painel, aprovação
 services/store.js   leitura e gravação no Google Sheets (ou memória em testes)
+services/fotos.js   fotos das notas no Cloudinary (ou memória em testes)
 public/index.html   app do colaborador (celular)
 public/app.js
 public/admin.html   painel do Maurício
