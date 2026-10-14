@@ -21,6 +21,7 @@ const F = {            // filtros de cada tela (ficam guardados ao trocar de tel
   l: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '', colab: '', busca: '' },
   c: { colab: '', ano: hoje().slice(0, 4) },
   f: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '' },
+  d: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), colab: '', busca: '', status: '' },
 };
 
 // Versão nova no servidor (deploy): a página se recarrega sozinha no próximo momento seguro
@@ -126,7 +127,7 @@ function telaLancamentos() {
       <div><h1>Lançamentos</h1><p>Prestações de contas lançadas por colaborador</p></div>
       <div class="acts"><button class="btn secondary" id="l-exp">Exportar Excel</button><a class="btn" href="#nova">+ Nova prestação</a></div>
     </div>
-    ${pend.length ? `<div class="card pend"><h3>Despesas do celular aguardando aprovação (${pend.length})</h3>
+    ${pend.length ? `<div class="card pend"><h3 style="display:flex;justify-content:space-between">Despesas do celular aguardando aprovação (${pend.length})<a class="link" href="#despesas">Ver todas →</a></h3>
       ${pend.map(d => `<div class="pend-row">
         <span><b>${esc(d.colaborador)}</b><br><span class="muted small">${esc(d.funcao)}</span></span>
         <span>${esc(d.categoria)}<br><span class="muted small">${dmy(d.data)}</span></span>
@@ -212,7 +213,8 @@ function modalNota(d, voltar) {
         </div>
         ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
-        ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>' : ''}
+        ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
+          : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === 'Aprovada' ? 'aprovação' : 'recusa'}</button>`}
         <button class="btn secondary" id="m-fechar">${voltar ? 'Voltar' : 'Fechar'}</button>
       </div>
     </div>`, 'modal-nota');
@@ -225,11 +227,94 @@ function modalNota(d, voltar) {
   const decidir = acao => async e => {
     const botao = e.currentTarget; // guardado antes do await (depois dele o evento já não aponta para o botão)
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
+    if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
     botao.disabled = true;
     try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); fecharModal(); desenharTela(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
+  else m.querySelector('#m-desfazer').onclick = decidir('reabrir');
+}
+// Desfazer = a despesa volta para "Em análise" (sai dos totais, se estava aprovada)
+const confirmarDesfazer = d => confirmar(
+  d.status === 'Aprovada'
+    ? `A despesa de ${d.colaborador} (${brl(d.valor)}) volta para "Em análise" e sai dos totais até ser aprovada de novo.`
+    : `A despesa de ${d.colaborador} (${brl(d.valor)}) volta para "Em análise" e pode ser aprovada.`,
+  { titulo: d.status === 'Aprovada' ? 'Desfazer a aprovação?' : 'Desfazer a recusa?', ok: 'Desfazer' });
+
+// ======================= DESPESAS DO CELULAR =======================
+// Todas as despesas enviadas pelo app, com filtro por status (inclui as recusadas, que não aparecem nos Lançamentos)
+const STATUS_COR = { 'Em análise': 'b-amber', Aprovada: 'b-green', Recusada: 'b-red' };
+function telaDespesas() {
+  const f = F.d;
+  const busca = semAcento(f.busca);
+  const anosD = [...new Set([hoje().slice(0, 4), ...D.despesas.map(d => d.data.slice(0, 4))])].sort().reverse();
+  const doPeriodo = D.despesas.filter(d => d.data.startsWith(f.ano) && (!f.mes || d.data.slice(5, 7) === f.mes)
+    && (!f.colab || d.colaboradorId === f.colab) && (!busca || semAcento(d.colaborador + ' ' + d.observacao + ' ' + d.categoria).includes(busca)));
+  const rows = doPeriodo.filter(d => !f.status || d.status === f.status)
+    .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
+  const conta = st => doPeriodo.filter(d => d.status === st);
+  const soma = l => r2(l.reduce((s, d) => s + d.valor, 0));
+  const quando = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
+  const chip = (st, rot) => `<button class="chip sm${f.status === st ? ' on' : ''}" data-st="${esc(st)}">${esc(rot)}</button>`;
+
+  $('page').innerHTML = `
+    <div class="page-head">
+      <div><h1>Despesas do celular</h1><p>Tudo o que os colaboradores enviaram pelo app, inclusive as recusadas</p></div>
+      <div class="acts"><button class="btn secondary" id="d-exp">Exportar Excel</button></div>
+    </div>
+    <div class="card filters" style="grid-template-columns:110px 150px 1fr 1.4fr">
+      <div class="field"><label>Ano</label><select class="input" id="d-ano">${anosD.map(a => opt(a, a, f.ano)).join('')}</select></div>
+      <div class="field"><label>Mês da nota</label><select class="input" id="d-mes">${optsMes(f.mes)}</select></div>
+      <div class="field"><label>Colaborador</label><select class="input" id="d-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
+      <div class="field"><label>Buscar</label><input class="input" id="d-busca" placeholder="Nome, categoria ou observação" value="${esc(f.busca)}"></div>
+      <div class="chips" style="grid-column:1/-1"><span class="muted small">Status:</span>
+        ${chip('', `Todas (${doPeriodo.length})`)}${chip('Em análise', `Em análise (${conta('Em análise').length})`)}${chip('Aprovada', `Aprovadas (${conta('Aprovada').length})`)}${chip('Recusada', `Recusadas (${conta('Recusada').length})`)}</div>
+    </div>
+    <div class="kpis">
+      <div class="card kpi"><span class="l">Total (filtro atual)</span><span class="v">${brl(soma(rows))}</span><span class="d">${rows.length} despesa${rows.length === 1 ? '' : 's'}</span></div>
+      <div class="card kpi"><span class="l">Em análise</span><span class="v">${brl(soma(conta('Em análise')))}</span><span class="d">${conta('Em análise').length} aguardando</span></div>
+      <div class="card kpi"><span class="l">Aprovadas</span><span class="v">${brl(soma(conta('Aprovada')))}</span><span class="d">${conta('Aprovada').length} no período</span></div>
+      <div class="card kpi"><span class="l">Recusadas</span><span class="v">${brl(soma(conta('Recusada')))}</span><span class="d">${conta('Recusada').length} no período</span></div>
+    </div>
+    <div class="card table-card"><div class="table-wrap"><table>
+      <thead><tr><th>Data</th><th>Colaborador</th><th>Categoria</th><th class="num">Valor</th><th>Observação</th><th>Status</th><th>Nota</th><th>Ações</th></tr></thead>
+      <tbody>${rows.map(d => `<tr class="click" data-desp="${esc(d.id)}">
+        <td>${dmy(d.data)}</td>
+        <td class="b">${esc(d.colaborador)}<br><span class="muted small" style="font-weight:400">${esc(d.funcao)}</span></td>
+        <td>${esc(d.categoria)}</td><td class="num b">${fmt(d.valor)}</td>
+        <td class="muted">${esc(d.observacao) || '—'}</td>
+        <td><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span>${d.avaliadoEm ? `<br><span class="muted small">${quando(d.avaliadoEm)}</span>` : ''}</td>
+        <td>${d.foto ? '📷' : '<span class="muted small">—</span>'}</td>
+        <td><span class="chips">${d.status === 'Em análise'
+          ? `<button class="btn xs ok" data-dap="${esc(d.id)}">Aprovar</button><button class="btn xs no" data-drc="${esc(d.id)}">Recusar</button>`
+          : `<button class="btn xs" data-dre="${esc(d.id)}">↩ Desfazer</button>`}</span></td></tr>`).join('')
+        || `<tr class="empty-row"><td colspan="8">Nenhuma despesa para esse filtro.</td></tr>`}</tbody>
+    </table></div></div>
+    <p class="muted small" style="margin:0">Clique em uma linha para ver a nota e os detalhes. "Desfazer" volta a despesa para "Em análise".</p>`;
+
+  const set = (id, k, ev = 'change') => $(id).addEventListener(ev, e => {
+    f[k] = e.target.value; telaDespesas();
+    if (ev === 'input') { const el = $(id); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  });
+  set('d-ano', 'ano'); set('d-mes', 'mes'); set('d-colab', 'colab'); set('d-busca', 'busca', 'input');
+  document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; telaDespesas(); });
+  const acha = id => D.despesas.find(d => d.id === id);
+  const agir = (attr, acao) => document.querySelectorAll(`[${attr}]`).forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation(); // não abre a janela da linha
+    const d = acha(b.getAttribute(attr));
+    if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
+    if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
+    b.disabled = true;
+    try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); telaDespesas(); }
+    catch (err) { avisar(err.message, 'Não foi possível concluir'); b.disabled = false; }
+  }));
+  agir('data-dap', 'aprovar'); agir('data-drc', 'recusar'); agir('data-dre', 'reabrir');
+  document.querySelectorAll('tr[data-desp]').forEach(tr => tr.addEventListener('click', () => modalNota(acha(tr.dataset.desp))));
+  $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
+    [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Foto', 7)],
+    [...rows.map(d => [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, d.status, quando(d.avaliadoEm), d.foto ? 'Sim' : 'Não']),
+      ['Total', '', '', '', soma(rows), '', '', '', '']]));
 }
 
 // ======================= 02 · NOVA PRESTAÇÃO =======================
@@ -554,7 +639,7 @@ function modalFuncao() {
 const rota = () => (location.hash.slice(1) || 'lancamentos').split('/');
 function desenharTela() {
   const [v, arg] = rota();
-  ({ lancamentos: telaLancamentos, nova: () => telaNova(arg), colaborador: telaColaborador, funcao: telaFuncao, colaboradores: telaColaboradores }[v] || telaLancamentos)();
+  ({ lancamentos: telaLancamentos, despesas: telaDespesas, nova: () => telaNova(arg), colaborador: telaColaborador, funcao: telaFuncao, colaboradores: telaColaboradores }[v] || telaLancamentos)();
 }
 function render() {
   if (!D) return;
