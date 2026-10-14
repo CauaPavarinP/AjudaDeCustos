@@ -17,7 +17,7 @@ const TABELAS = {
     cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['funcao', 'Funcao'],
       ['dataInicial', 'DataInicial'], ['dataFinal', 'DataFinal'], ['mesRef', 'MesReferencia'],
       ['combustivel', 'Combustivel'], ['alimentacao', 'Alimentacao'], ['degustacao', 'Degustacao'], ['hotel', 'Hotel'],
-      ['transporte', 'Transporte'], ['outros', 'Outros'], ['total', 'Total'], ['observacao', 'Observacao'], ['criadoEm', 'CriadoEm']],
+      ['transporte', 'Transporte'], ['outros', 'Outros'], ['total', 'Total'], ['observacao', 'Observacao'], ['criadoEm', 'CriadoEm'], ['fotos', 'Fotos']],
     num: ['combustivel', 'alimentacao', 'degustacao', 'hotel', 'transporte', 'outros', 'total'],
   },
   Despesas: {
