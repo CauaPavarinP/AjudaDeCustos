@@ -49,6 +49,8 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .b-purple { background: var(--purple-soft); color: var(--purple); }
 .b-pink { background: #fce7f3; color: #be185d; }
 .b-blue { background: var(--primary-soft); color: var(--primary); }
+.badge .x { background: none; border: 0; padding: 0 0 0 6px; margin: 0; color: inherit; opacity: .55; cursor: pointer; font-size: 13px; line-height: 1; }
+.badge .x:hover { opacity: 1; }
 
 /* ================= PAINEL (desktop) ================= */
 .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }

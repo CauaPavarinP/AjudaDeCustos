@@ -243,6 +243,19 @@ app.post('/api/admin/funcoes', exigeAdmin, wrap(async (req, res) => {
   await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
   res.status(201).json({ ok: true });
 }));
+// Só exclui função que nenhum colaborador (ativo ou inativo) usa. Os lançamentos antigos guardam
+// o nome da função como texto, então os resumos continuam iguais depois da exclusão.
+app.delete('/api/admin/funcoes/:nome', exigeAdmin, wrap(async (req, res) => {
+  const nome = String(req.params.nome);
+  const f = (await store.list('Funcoes')).find(x => x.nome === nome);
+  if (!f) return erro(res, 'Função não encontrada.', 404);
+  const usando = (await store.list('Colaboradores')).filter(c => c.funcao === nome);
+  if (usando.length) {
+    return erro(res, `A função "${nome}" está no cadastro de ${usando.length} colaborador${usando.length === 1 ? '' : 'es'} (${usando.slice(0, 3).map(c => c.nome).join(', ')}${usando.length > 3 ? '...' : ''}). Troque a função deles em Editar antes de excluir.`);
+  }
+  await store.remove('Funcoes', f.id);
+  res.json({ ok: true });
+}));
 
 // ---- colaboradores ----
 async function validarColab(body, idAtual) {
@@ -281,6 +294,18 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const c = await store.update('Colaboradores', id, campos);
   if (!c) return erro(res, 'Colaborador não encontrado.', 404);
   res.json({ ...publicoColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
+}));
+
+// Só exclui colaborador sem nenhum lançamento; quem tem histórico deve ser desativado,
+// para os resumos continuarem certos.
+app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
+  const id = String(req.params.id);
+  const [prest, desp] = await Promise.all([store.list('Prestacoes'), store.list('Despesas')]);
+  const n = prest.filter(p => p.colaboradorId === id).length + desp.filter(d => d.colaboradorId === id).length;
+  if (n) return erro(res, `Este colaborador tem ${n} lançamento${n === 1 ? '' : 's'} (prestações ou despesas do app). Para manter o histórico, use Desativar.`);
+  const ok = await store.remove('Colaboradores', id);
+  if (!ok) return erro(res, 'Colaborador não encontrado.', 404);
+  res.json({ ok: true });
 }));
 
 // ---- prestações (lançadas pelo Maurício) ----
