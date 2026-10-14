@@ -399,8 +399,8 @@ function telaNova(id) {
             <div class="field"><label>Função</label><input class="input" id="n-funcao" readonly placeholder="Automático"></div>
           </div>
           <div class="row3">
-            <div class="field"><label>Data inicial</label><input class="input" type="date" id="n-ini" min="2000-01-01" max="${Number(hoje().slice(0, 4)) + 1}-12-31" value="${p ? p.dataInicial : ''}"></div>
-            <div class="field"><label>Data final</label><input class="input" type="date" id="n-fim" min="2000-01-01" max="${Number(hoje().slice(0, 4)) + 1}-12-31" value="${p ? p.dataFinal : ''}"></div>
+            <div class="field"><label for="n-ini">Data inicial</label>${campoData('n-ini', p ? p.dataInicial : '', { min: '2000-01-01', max: `${Number(hoje().slice(0, 4)) + 1}-12-31` })}</div>
+            <div class="field"><label for="n-fim">Data final</label>${campoData('n-fim', p ? p.dataFinal : '', { min: '2000-01-01', max: `${Number(hoje().slice(0, 4)) + 1}-12-31` })}</div>
             <div class="field"><label>Mês de referência</label><select class="input" id="n-mes"></select></div>
           </div>
           <span class="muted small">A regra do mês de referência (quando o período passa de um mês para outro) ainda será definida com o Maurício. Por padrão, fica o mês da data inicial.</span>
@@ -444,11 +444,12 @@ function telaNova(id) {
   $('n-colab').addEventListener('change', funcao); funcao();
   const meses = manter => {
     const atual = manter || $('n-mes').value;
-    const lista = mesesEntre($('n-ini').value, $('n-fim').value);
+    const lista = mesesEntre(lerData('n-ini'), lerData('n-fim'));
     if (manter && !lista.includes(manter)) lista.unshift(manter);
     $('n-mes').innerHTML = lista.length ? lista.map(ym => opt(ym, nomeMes(ym), lista.includes(atual) ? atual : lista[0])).join('') : opt('', 'Escolha as datas', '');
   };
-  $('n-ini').addEventListener('change', () => { if (!$('n-fim').value || $('n-fim').value < $('n-ini').value) $('n-fim').value = $('n-ini').value; meses(); });
+  ligarData('n-ini'); ligarData('n-fim');
+  $('n-ini').addEventListener('change', () => { const ini = lerData('n-ini'); if (ini && (!lerData('n-fim') || lerData('n-fim') < ini)) definirData('n-fim', ini); meses(); });
   $('n-fim').addEventListener('change', () => meses());
   meses(p ? p.mesRef : '');
 
@@ -492,7 +493,7 @@ function telaNova(id) {
   desenhaFotos();
 
   $('n-salvar').addEventListener('click', async () => {
-    const corpo = { colaboradorId: $('n-colab').value, dataInicial: $('n-ini').value, dataFinal: $('n-fim').value, mesRef: $('n-mes').value, observacao: $('n-obs').value };
+    const corpo = { colaboradorId: $('n-colab').value, dataInicial: lerData('n-ini'), dataFinal: lerData('n-fim'), mesRef: $('n-mes').value, observacao: $('n-obs').value };
     CAT.forEach(c => { corpo[c.chave] = Number(document.querySelector(`[data-cat="${c.chave}"]`).dataset.c || 0) / 100; });
     $('n-erro').classList.add('hidden');
     $('n-salvar').disabled = true;

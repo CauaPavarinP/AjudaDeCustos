@@ -93,7 +93,10 @@ const dataValida = s => !problemaData(s, 'A data');
 // Diz o que está errado na data (vazia, inexistente ou com ano fora do intervalo), ou '' se estiver certa
 function problemaData(s, nome) {
   if (!s) return `Informe ${nome.toLowerCase()}.`;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s + 'T00:00:00Z'))) return `${nome} é inválida.`;
+  // Confere se o dia existe de verdade: o JavaScript "corrige" 31/02 para 03/03 sem avisar
+  const existe = /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'))
+    && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+  if (!existe) return `${nome} não existe (${s.split('-').reverse().join('/')}). Confira o dia e o mês.`;
   const ano = Number(s.slice(0, 4));
   if (ano < ANO_MIN || ano > anoMax()) return `${nome} está com o ano ${ano}. Use um ano entre ${ANO_MIN} e ${anoMax()}.`;
   return '';
