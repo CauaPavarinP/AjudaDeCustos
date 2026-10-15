@@ -217,7 +217,11 @@ tr.off td { color: var(--muted); }
 .rows { display: flex; flex-direction: column; }
 .rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
 .rows > div:last-child { border-bottom: 0; }
-.rows > div > span:last-child { white-space: nowrap; } /* valor (R$ 10,00) não quebra em duas linhas */
+.rows > div > span:last-child { white-space: nowrap; }
+/* resumos: valor clicável abre o detalhe */
+td.cel-click { cursor: pointer; }
+td.cel-click:hover { color: var(--primary); text-decoration: underline; }
+.det-cat { display: flex; justify-content: space-between; font-size: 13px; margin: 2px 2px -6px; } /* valor (R$ 10,00) não quebra em duas linhas */
 .rows span:first-child { color: var(--muted); }
 .rows span:last-child { font-weight: 600; text-align: right; }
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }

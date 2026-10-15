@@ -203,6 +203,47 @@ function modalDespesasApp(r) {
   m.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => modalNota(D.despesas.find(d => d.id === b.dataset.nota), () => modalDespesasApp(r)));
 }
 
+// Detalhe de um valor dos resumos: o que formou aquele número (despesas aprovadas do celular, uma a uma,
+// e prestações do painel com o valor da categoria). chaves = categorias da célula (todas, no Total).
+const chaveCat = nome => (CAT.find(c => c.nome === nome) || CAT[CAT.length - 1]).chave; // mesma regra de linhas()
+function modalDetalhe(titulo, sub, rows, chaves) {
+  const secoes = chaves.map(ch => {
+    const cat = CAT.find(c => c.chave === ch);
+    const itens = [];
+    for (const r of rows) {
+      if (r.origem === 'app') {
+        for (const d of r.despesas) if (chaveCat(d.categoria) === ch) itens.push({ data: d.data, app: d, valor: d.valor });
+      } else if (r.valores[ch]) itens.push({ data: r.dataInicial, prest: r, valor: r.valores[ch] });
+    }
+    itens.sort((a, b) => a.data.localeCompare(b.data));
+    return { cat, itens, total: r2(itens.reduce((s, i) => s + i.valor, 0)) };
+  }).filter(s => s.itens.length);
+  const total = r2(secoes.reduce((s, x) => s + x.total, 0));
+  const linha = i => i.app
+    ? `<div><span>${dmy(i.data)} · ${esc(i.app.observacao || i.app.categoria)}${i.app.foto ? ` <button class="link tag-foto" data-nota="${esc(i.app.id)}">📷 ver nota</button>` : ''}<br><span class="muted small">Despesa do celular</span></span><span>${brl(i.valor)}</span></div>`
+    : `<div><span>${dm(i.prest.dataInicial)}${i.prest.dataInicial.slice(0, 4) !== i.prest.dataFinal.slice(0, 4) ? '/' + i.prest.dataInicial.slice(0, 4) : ''} a ${dmy(i.prest.dataFinal)}${i.prest.observacao ? ' · ' + esc(i.prest.observacao) : ''}${i.prest.fotos ? ` <span class="tag-foto">📎${i.prest.fotos}</span>` : ''} <button class="link tag-foto" data-prest="${esc(i.prest.id)}">abrir</button><br><span class="muted small">Prestação do painel · mês ref. ${nomeMes(i.prest.mesRef)}</span></span><span>${brl(i.valor)}</span></div>`;
+  const reabrir = () => modalDetalhe(titulo, sub, rows, chaves);
+  const m = abrirModal(`<h3>${esc(titulo)}</h3>
+    <p class="muted small" style="margin:0">${esc(sub)} · somente despesas aprovadas · total <b>${brl(total)}</b></p>
+    ${secoes.map(s => `${secoes.length > 1 || chaves.length > 1 ? `<div class="det-cat"><b>${esc(s.cat.nome)}</b><span>${brl(s.total)}</span></div>` : ''}
+      <div class="rows card">${s.itens.map(linha).join('')}</div>`).join('') || '<p class="muted">Nenhum lançamento.</p>'}
+    <div class="acts"><button class="btn secondary" id="m-fechar">Fechar</button></div>`);
+  m.querySelector('#m-fechar').onclick = fecharModal;
+  m.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => modalNota(D.despesas.find(d => d.id === b.dataset.nota), reabrir));
+  m.querySelectorAll('[data-prest]').forEach(b => b.onclick = () => { fecharModal(); location.hash = '#nova/' + b.dataset.prest; });
+}
+// Célula clicável dos resumos (só quando tem valor)
+const celClick = (v, attrs, extra = '') => `<td class="num${extra}${v ? ' cel-click' : ' dim'}"${v ? ` ${attrs} title="Ver o que formou este valor"` : ''}>${cel(v)}</td>`;
+// Liga o clique das células: filtro(td) devolve as linhas que formam aquele valor
+function ligarCelulas(filtro, titulo, subtitulo) {
+  document.querySelectorAll('.cel-click').forEach(td => td.addEventListener('click', () => {
+    const total = td.dataset.c === 'total';
+    const chaves = total ? CAT.map(c => c.chave) : [td.dataset.c];
+    const nomeCat = total ? 'Todas as categorias' : CAT.find(c => c.chave === td.dataset.c).nome;
+    modalDetalhe(`${titulo(td)} · ${nomeCat}`, subtitulo(td), filtro(td), chaves);
+  }));
+}
+
 // Analisar uma despesa do celular: foto da nota (clique para ampliar) ao lado dos dados, com Aprovar/Recusar
 function modalNota(d, voltar) {
   if (!d) return;
@@ -561,10 +602,13 @@ function telaColaborador() {
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Mês</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th class="num">Total</th></tr></thead>
-      <tbody>${porMes.map((m, i) => `<tr><td class="b">${MESES[i]}</td>${CAT.map(c => `<td class="num${m.v[c.chave] ? '' : ' dim'}">${cel(m.v[c.chave])}</td>`).join('')}<td class="num b">${cel(m.total)}</td></tr>`).join('')}
-        <tr class="total"><td>Total ${esc(f.ano)}</td>${CAT.map(c => `<td class="num">${cel(s.v[c.chave])}</td>`).join('')}<td class="num">${fmt(s.total)}</td></tr></tbody>
+      <tbody>${porMes.map((m, i) => `<tr><td class="b">${MESES[i]}</td>${CAT.map(c => celClick(m.v[c.chave], `data-m="${i + 1}" data-c="${c.chave}"`)).join('')}${celClick(m.total, `data-m="${i + 1}" data-c="total"`, ' b')}</tr>`).join('')}
+        <tr class="total"><td>Total ${esc(f.ano)}</td>${CAT.map(c => celClick(s.v[c.chave], `data-m="ano" data-c="${c.chave}"`)).join('')}${celClick(s.total, 'data-m="ano" data-c="total"')}</tr></tbody>
     </table></div></div>`;
 
+  // Clique num valor da tabela: abre as despesas e prestações que formam aquele número
+  const doMes = td => (td.dataset.m === 'ano' ? rows : rows.filter(r => Number(r.mesRef.slice(5)) === Number(td.dataset.m)));
+  ligarCelulas(doMes, () => (colab ? colab.nome : ''), td => (td.dataset.m === 'ano' ? `Ano ${f.ano}` : `${MESES[Number(td.dataset.m) - 1]}/${f.ano}`));
   $('c-colab').addEventListener('change', e => { f.colab = e.target.value; telaColaborador(); });
   $('c-ano').addEventListener('change', e => { f.ano = e.target.value; telaColaborador(); });
   $('c-exp').addEventListener('click', () => exportar(`resumo-${semAcento(colab ? colab.nome : 'colaborador').replace(/\W+/g, '-')}-${f.ano}`, colab ? colab.nome : 'Resumo',
@@ -588,7 +632,7 @@ function telaFuncao() {
   // Uma linha por colaborador e função (quem mudou de função aparece em cada uma, com o valor de cada)
   const porColab = [...new Set(rows.map(r => r.colaboradorId + '|' + r.funcao))].map(k => {
     const rr = rows.filter(r => r.colaboradorId + '|' + r.funcao === k);
-    return { nome: rr[0].colaborador, funcao: rr[0].funcao, ...somar(rr) };
+    return { k, nome: rr[0].colaborador, funcao: rr[0].funcao, ...somar(rr) };
   }).sort((a, b) => b.total - a.total);
   const periodo = f.mes ? MESES[Number(f.mes) - 1].toLowerCase() : f.ano;
 
@@ -610,11 +654,16 @@ function telaFuncao() {
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Colaborador</th><th>Função</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th class="num">Total</th></tr></thead>
-      <tbody>${porColab.map(r => `<tr><td class="b">${esc(r.nome)}</td><td>${esc(r.funcao)}</td>${CAT.map(c => `<td class="num${r.v[c.chave] ? '' : ' dim'}">${cel(r.v[c.chave])}</td>`).join('')}<td class="num b">${fmt(r.total)}</td></tr>`).join('')}
-        ${porColab.length ? `<tr class="total"><td colspan="2">Total ${esc(periodo)}</td>${CAT.map(c => `<td class="num">${cel(s.v[c.chave])}</td>`).join('')}<td class="num">${fmt(s.total)}</td></tr>`
+      <tbody>${porColab.map((r, i) => `<tr><td class="b">${esc(r.nome)}</td><td>${esc(r.funcao)}</td>${CAT.map(c => celClick(r.v[c.chave], `data-l="${i}" data-c="${c.chave}"`)).join('')}${celClick(r.total, `data-l="${i}" data-c="total"`, ' b')}</tr>`).join('')}
+        ${porColab.length ? `<tr class="total"><td colspan="2">Total ${esc(periodo)}</td>${CAT.map(c => celClick(s.v[c.chave], `data-l="todos" data-c="${c.chave}"`)).join('')}${celClick(s.total, 'data-l="todos" data-c="total"')}</tr>`
           : `<tr class="empty-row"><td colspan="${3 + CAT.length}">Nenhum lançamento nesse período.</td></tr>`}</tbody>
     </table></div></div>`;
 
+  // Clique num valor: abre as despesas e prestações daquele colaborador (e função) no período filtrado
+  const daLinha = td => (td.dataset.l === 'todos' ? rows : rows.filter(r => r.colaboradorId + '|' + r.funcao === porColab[Number(td.dataset.l)].k));
+  ligarCelulas(daLinha,
+    td => (td.dataset.l === 'todos' ? (f.funcao || 'Todas as funções') : `${porColab[Number(td.dataset.l)].nome} (${porColab[Number(td.dataset.l)].funcao})`),
+    () => (f.mes ? `${MESES[Number(f.mes) - 1]}/${f.ano}` : `Ano ${f.ano}`));
   [['f-ano', 'ano'], ['f-mes', 'mes'], ['f-func', 'funcao']].forEach(([id, k]) => $(id).addEventListener('change', e => { f[k] = e.target.value; telaFuncao(); }));
   $('f-exp').addEventListener('click', () => exportar(`resumo-funcao-${f.ano}${f.mes ? '-' + f.mes : ''}`, 'Resumo por função',
     [col('Colaborador', 26), col('Função', 14), ...colsCat()],
