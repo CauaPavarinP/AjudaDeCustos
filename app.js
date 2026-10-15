@@ -135,17 +135,20 @@ const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
 const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length });
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
 
-// Bloqueio simples contra tentativas de adivinhar senha
+// Bloqueio simples contra tentativas de adivinhar senha. Dois contadores:
+// - por aparelho (IP) + conta: 5 erros bloqueiam aquele aparelho por 10 minutos;
+// - só pela conta, de qualquer IP: 20 erros bloqueiam a conta por 10 minutos (quem troca de IP
+//   a cada tentativa não fica sem limite).
 const tentativas = new Map();
-const LIMITE = 5, BLOQUEIO_MS = 10 * 60 * 1000;
-const bloqueado = k => { const t = tentativas.get(k); return t && t.ate > Date.now(); };
-function falhou(k) {
+const LIMITE = 5, LIMITE_CONTA = 20, BLOQUEIO_MS = 10 * 60 * 1000;
+const bloqueado = (...ks) => ks.some(k => { const t = tentativas.get(k); return t && t.ate > Date.now(); });
+function falhou(k, limite = LIMITE) {
   const t = tentativas.get(k) || { n: 0 };
   t.n += 1;
-  if (t.n >= LIMITE) { t.ate = Date.now() + BLOQUEIO_MS; t.n = 0; }
+  if (t.n >= limite) { t.ate = Date.now() + BLOQUEIO_MS; t.n = 0; }
   tentativas.set(k, t);
 }
-const sucesso = k => tentativas.delete(k);
+const sucesso = (...ks) => ks.forEach(k => tentativas.delete(k));
 setInterval(() => {
   const agora = Date.now();
   for (const [k, t] of tentativas) if (!t.ate || t.ate < agora) tentativas.delete(k);
@@ -197,11 +200,11 @@ async function enviarFotoRef(res, ref) {
 // ================= COLABORADOR (celular) =================
 app.post('/api/login', wrap(async (req, res) => {
   const usuario = texto(req.body.usuario, 40).toLowerCase();
-  const chave = 'c:' + req.ip + ':' + usuario;
-  if (bloqueado(chave)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
+  const chave = 'c:' + req.ip + ':' + usuario, conta = 'C:' + usuario;
+  if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
   const c = (await store.list('Colaboradores')).find(x => x.usuario === usuario && x.ativo);
-  if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
-  sucesso(chave);
+  if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  sucesso(chave, conta);
   Object.assign(req.sessao, { c: c.id, cv: versaoSenha(c.senhaHash), ce: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
@@ -284,12 +287,12 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
 
 // ================= ADMINISTRADOR (Maurício) =================
 app.post('/api/admin/login', (req, res) => {
-  const chave = 'a:' + req.ip;
-  if (bloqueado(chave)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
+  const chave = 'a:' + req.ip, conta = 'A:admin';
+  if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
   const ok = iguais(texto(req.body.usuario, 100), process.env.ADMIN_USER || 'admin')
     && iguais(String(req.body.senha ?? ''), process.env.ADMIN_PASSWORD || 'admin');
-  if (!ok) { falhou(chave); return erro(res, 'Usuário ou senha incorretos.', 401); }
-  sucesso(chave);
+  if (!ok) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  sucesso(chave, conta);
   Object.assign(req.sessao, { a: 1, av: versaoAdmin(), ae: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
@@ -471,12 +474,16 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   const acao = req.params.acao;
   if (!['aprovar', 'recusar', 'reabrir'].includes(acao)) return erro(res, 'Ação inválida.', 404);
   const status = acao === 'aprovar' ? STATUS.aprovada : acao === 'recusar' ? STATUS.recusada : STATUS.analise;
+  // Aprovar/recusar só o que está em análise; desfazer só o que já foi avaliado. Evita que uma aba
+  // com dados antigos troque, sem avisar, uma decisão já tomada em outra aba.
+  const pode = atual => (acao === 'reabrir' ? atual.status !== STATUS.analise : atual.status === STATUS.analise);
   const d = await store.update('Despesas', String(req.params.id), {
     status,
     avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
     avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
-  });
-  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  }, pode);
+  if (d === null) return erro(res, 'Despesa não encontrada.', 404);
+  if (d === false) return erro(res, 'Esta despesa já foi alterada em outra tela. A lista foi atualizada; confira o status atual.', 409);
   res.json(publicoDesp(d));
 }));
 app.get('/api/admin/despesas/:id/foto', exigeAdmin, wrap(async (req, res) =>

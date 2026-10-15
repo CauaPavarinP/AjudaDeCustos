@@ -116,7 +116,7 @@ async function telaInicio(recebidas) {
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
-  const total = lista.reduce((s, d) => s + d.valor, 0);
+  const total = lista.filter(d => d.status !== 'Recusada').reduce((s, d) => s + d.valor, 0); // recusadas não contam
   const aprov = lista.filter(d => d.status === 'Aprovada').length, anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
   const nomeMes = ym => MESES[Number(ym.slice(5)) - 1] + '/' + ym.slice(0, 4);
   mostrar(`
@@ -125,7 +125,7 @@ async function telaInicio(recebidas) {
       <select class="input" id="i-mes">${meses.map(m => `<option value="${m}"${m === mesSel ? ' selected' : ''}>${MES_CURTO[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}</option>`).join('')}<option value="todas"${mesSel === 'todas' ? ' selected' : ''}>Todas</option></select>
     </div>
     <div class="hero">
-      <span class="l">${mesSel === 'todas' ? 'Total geral' : 'Total no mês'}</span>
+      <span class="l">${mesSel === 'todas' ? 'Total geral' : 'Total no mês'}${rec ? ' (sem as recusadas)' : ''}</span>
       <span class="v">${brl(total)}</span>
       <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
     </div>
