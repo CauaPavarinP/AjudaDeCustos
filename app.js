@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const { criarStore, novoId, paraNumero } = require('./services/store');
+const { resumoErro, ondeAconteceu } = require('./services/erros');
 const { criarFotos, lerDataUrl } = require('./services/fotos');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -491,7 +492,10 @@ app.use('/api', (req, res) => erro(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large') return erro(res, 'Foto muito grande. Tente outra foto.', 413);
   if (err.status >= 400 && err.status < 500) return erro(res, 'Requisição inválida.', err.status);
-  console.error('[erro]', err);
+  // Só o resumo: o objeto inteiro de um erro do Google traz o token de acesso nos cabeçalhos
+  console.error(`[erro] ${req.method} ${req.originalUrl.split('?')[0]} — ${resumoErro(err)}`);
+  const onde = ondeAconteceu(err);
+  if (onde) console.error(onde);
   res.status(500).json({ erro: 'Erro interno. Tente novamente.' });
 });
 
@@ -503,4 +507,4 @@ async function iniciar() {
   }
   app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo}, fotos: ${fotos ? fotos.modo : "desligadas"})`));
 }
-iniciar().catch(err => { console.error('Falha ao iniciar:', err.message); process.exit(1); });
+iniciar().catch(err => { console.error('Falha ao iniciar:', resumoErro(err)); process.exit(1); });
