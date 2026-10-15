@@ -142,6 +142,10 @@ tr.off td { color: var(--muted); }
 .modal { width: 100%; max-width: 420px; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
 .modal h3 { margin: 0; font-size: 17px; }
 .modal .acts { display: flex; gap: 8px; justify-content: flex-end; }
+/* Janela mais alta que a tela (muitas despesas, nota no celular): rola por dentro e os botões
+   de baixo (Fechar, Salvar...) ficam sempre visíveis */
+.modal { max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.modal > .acts { position: sticky; bottom: -22px; margin: 0 -22px -22px; padding: 12px 22px 22px; background: var(--white); }
 /* janelas de aviso e confirmação (public/dialogo.js) */
 .dialogo-bg { z-index: 70; }
 .modal.dialogo { max-width: 400px; }
@@ -213,6 +217,7 @@ tr.off td { color: var(--muted); }
 .rows { display: flex; flex-direction: column; }
 .rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
 .rows > div:last-child { border-bottom: 0; }
+.rows > div > span:last-child { white-space: nowrap; } /* valor (R$ 10,00) não quebra em duas linhas */
 .rows span:first-child { color: var(--muted); }
 .rows span:last-child { font-weight: 600; text-align: right; }
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }
