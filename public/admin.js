@@ -250,7 +250,7 @@ function ligarCelulas(filtro, titulo, subtitulo) {
 function modalNota(d, voltar) {
   if (!d) return;
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '—');
-  const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto';
+  const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto' + (d.fotoV ? '?v=' + d.fotoV : ''); // ?v muda quando a foto é trocada
   const emAnalise = d.status === 'Em análise';
   const m = abrirModal(`<h3>Analisar despesa · ${esc(d.colaborador)}</h3>
     <div class="nota-grid">

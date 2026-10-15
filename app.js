@@ -128,7 +128,10 @@ function senhaTemporaria() {
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
   return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
 }
-const publicoDesp = d => ({ ...d, foto: !!d.foto });
+// fotoV: "versão" da foto (muda quando a foto é trocada). Vai no endereço da imagem para o navegador
+// não mostrar a foto antiga guardada em cache. É um resumo da referência, que nunca sai do servidor.
+const versaoFoto = ref => (ref ? crypto.createHash('sha256').update(String(ref)).digest('hex').slice(0, 10) : '');
+const publicoDesp = d => ({ ...d, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
 // Comprovantes da prestação: várias fotos, guardadas como referências separadas por "|" na coluna Fotos
 const MAX_FOTOS_PREST = 10;
 const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);

@@ -313,3 +313,18 @@ test('login: trocar de IP a cada tentativa não escapa do bloqueio da conta', as
   // Bloqueada a conta, nem a senha certa entra por um IP novo
   assert.equal(await tentar('10.9.99.1', senha), 429);
 });
+
+test('foto trocada muda a versão (fotoV) para o painel não mostrar a antiga do cache', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10, foto: fotoFake() })).dados;
+  assert.match(d.fotoV, /^[0-9a-f]{10}$/);
+  const outra = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 9)]).toString('base64');
+  assert.equal((await c.put(`/api/despesas/${d.id}/foto`, { foto: outra })).status, 200);
+  const noPainel = (await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d.id);
+  assert.ok(noPainel.fotoV && noPainel.fotoV !== d.fotoV, 'a versão deveria mudar');
+  assert.ok(!JSON.stringify(noPainel).includes('ajuda-de-custo/'), 'a referência da foto não sai do servidor');
+  const img = await a.get(`/api/admin/despesas/${d.id}/foto?v=${noPainel.fotoV}`);
+  assert.equal(img.status, 200);
+  assert.equal(img.dados[img.dados.length - 1], 9); // é a foto nova
+});
