@@ -252,3 +252,34 @@ test('datas que não existem (31/02, 30/04, 29/02 fora de ano bissexto) são rec
   // 29/02 em ano bissexto existe
   assert.equal((await a.post('/api/admin/prestacoes', { ...base, dataInicial: '2024-02-29', dataFinal: '2024-03-02', mesRef: '2024-02' })).status, 201);
 });
+
+test('log de erro: resumo de um erro do Google não mostra o token de acesso', async () => {
+  const { resumoErro, ondeAconteceu } = require('../services/erros');
+  const http = require('node:http');
+  const { default: ky } = await import('ky');
+  // Servidor falso que responde como a API do Google quando falta permissão
+  const falso = http.createServer((req, res) => {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: 403, message: 'The caller does not have permission' } }));
+  });
+  await new Promise(ok => falso.listen(0, ok));
+  const TOKEN = 'ya29.TOKEN_DE_TESTE_123';
+  let err;
+  try {
+    // Mesmo jeito que a biblioteca da planilha põe o token: cabeçalho Authorization num hook
+    await ky.get(`http://127.0.0.1:${falso.address().port}/planilha`, {
+      retry: 0,
+      hooks: { beforeRequest: [({ request }) => { request.headers.set('Authorization', `Bearer ${TOKEN}`); }] },
+    });
+  } catch (e) { err = e; } finally { falso.close(); }
+  assert.ok(err, 'a requisição deveria falhar');
+  assert.ok(require('node:util').inspect(err).includes(TOKEN), 'o objeto inteiro do erro contém o token (motivo do resumo)');
+  const linha = resumoErro(err);
+  assert.ok(!linha.includes(TOKEN), linha);
+  assert.ok(!ondeAconteceu(err).includes(TOKEN));
+  assert.match(linha, /403/);
+  // Erro comum de código: mostra a mensagem e onde aconteceu
+  const comum = new TypeError('x is not a function');
+  assert.equal(resumoErro(comum), 'TypeError: x is not a function');
+  assert.match(ondeAconteceu(comum), /at /);
+});
