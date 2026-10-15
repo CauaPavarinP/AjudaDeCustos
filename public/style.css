@@ -219,8 +219,10 @@ tr.off td { color: var(--muted); }
 .rows > div:last-child { border-bottom: 0; }
 .rows > div > span:last-child { white-space: nowrap; }
 /* resumos: valor clicável abre o detalhe */
-td.cel-click { cursor: pointer; }
-td.cel-click:hover { color: var(--primary); text-decoration: underline; }
+/* parece um quadrado selecionável: ao passar o mouse destaca, ao clicar fica marcado (o último aberto) */
+td.cel-click { cursor: pointer; transition: background .12s, box-shadow .12s; }
+td.cel-click:hover { background: var(--primary-soft); color: var(--primary-dark); box-shadow: inset 0 0 0 1px var(--primary); }
+td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: var(--primary-dark); font-weight: 700; box-shadow: inset 0 0 0 2px var(--primary); }
 .det-cat { display: flex; justify-content: space-between; font-size: 13px; margin: 2px 2px -6px; } /* valor (R$ 10,00) não quebra em duas linhas */
 .rows span:first-child { color: var(--muted); }
 .rows span:last-child { font-weight: 600; text-align: right; }

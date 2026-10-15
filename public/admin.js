@@ -237,6 +237,8 @@ const celClick = (v, attrs, extra = '') => `<td class="num${extra}${v ? ' cel-cl
 // Liga o clique das células: filtro(td) devolve as linhas que formam aquele valor
 function ligarCelulas(filtro, titulo, subtitulo) {
   document.querySelectorAll('.cel-click').forEach(td => td.addEventListener('click', () => {
+    document.querySelectorAll('.cel-click.sel').forEach(x => x.classList.remove('sel'));
+    td.classList.add('sel'); // fica marcado: mostra qual valor foi aberto
     const total = td.dataset.c === 'total';
     const chaves = total ? CAT.map(c => c.chave) : [td.dataset.c];
     const nomeCat = total ? 'Todas as categorias' : CAT.find(c => c.chave === td.dataset.c).nome;
