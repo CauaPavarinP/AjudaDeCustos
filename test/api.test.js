@@ -283,3 +283,33 @@ test('log de erro: resumo de um erro do Google não mostra o token de acesso', a
   assert.equal(resumoErro(comum), 'TypeError: x is not a function');
   assert.match(ondeAconteceu(comum), /at /);
 });
+
+test('aprovação: decisão já tomada em outra aba não é trocada sem aviso (409)', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/reabrir`)).status, 409); // já está em análise
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/aprovar`)).status, 200);
+  const r = await a.post(`/api/admin/despesas/${d.id}/recusar`); // aba antiga ainda mostrava "Em análise"
+  assert.equal(r.status, 409);
+  assert.match(r.dados.erro, /outra tela/);
+  assert.equal((await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d.id).status, 'Aprovada');
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/reabrir`)).status, 200);
+  assert.equal((await a.post(`/api/admin/despesas/${d.id}/recusar`)).status, 200);
+});
+
+test('login: trocar de IP a cada tentativa não escapa do bloqueio da conta', async () => {
+  const a = await adminLogado();
+  const { usuario, senha } = await novoColaborador(a);
+  const tentar = (ip, s) => fetch(B + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: JSON.stringify({ usuario, senha: s }),
+  }).then(r => r.status);
+  // 4 erros por IP (abaixo do limite de 5 por aparelho), em IPs diferentes
+  const status = [];
+  for (let i = 0; i < 24; i++) status.push(await tentar(`10.9.${Math.floor(i / 4)}.1`, 'errada'));
+  assert.ok(status.slice(0, 20).every(s => s === 401), status.join(','));
+  assert.ok(status.slice(20).every(s => s === 429), status.join(','));
+  // Bloqueada a conta, nem a senha certa entra por um IP novo
+  assert.equal(await tentar('10.9.99.1', senha), 429);
+});

@@ -163,6 +163,11 @@ tr.off td { color: var(--muted); }
   .sidebar { position: static; height: auto; }
   .page { padding: 18px 16px; }
   .row3, .row2 { grid-template-columns: 1fr; }
+  /* os filtros e cartões do painel têm colunas definidas na própria tela; no celular viram 1 ou 2 colunas */
+  .filters { grid-template-columns: 1fr 1fr !important; }
+  .filters .field:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .kpis { grid-template-columns: 1fr 1fr !important; }
+  .kpis > .filters { grid-column: 1 / -1; }
 }
 
 /* ================= COLABORADOR (celular) ================= */

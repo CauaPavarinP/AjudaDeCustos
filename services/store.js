@@ -76,9 +76,11 @@ function criarStoreMemoria() {
     async init() {},
     async list(t) { return copia(dados[t]); },
     async add(t, obj) { dados[t].push(copia(obj)); return copia(obj); },
-    async update(t, id, campos) {
+    // se(atual) opcional: só grava se a condição for verdadeira; senão devolve false (conflito)
+    async update(t, id, campos, se) {
       const o = dados[t].find(x => x.id === id);
       if (!o) return null;
+      if (se && !se(copia(o))) return false;
       Object.assign(o, copia(campos));
       return copia(o);
     },
@@ -145,10 +147,12 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       limpar(t);
       return obj;
     }),
-    update: (t, id, campos) => naFila(t, async () => {
+    update: (t, id, campos, se) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return null;
-      const atual = { ...deLinha(t, row.toObject()), ...campos };
+      const antes = deLinha(t, row.toObject());
+      if (se && !se(antes)) return false;
+      const atual = { ...antes, ...campos };
       row.assign(paraLinha(t, atual));
       await row.save({ raw: true });
       limpar(t);

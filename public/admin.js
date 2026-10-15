@@ -37,10 +37,17 @@ async function api(url, opts = {}) {
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
   if (r.status === 401 && !url.endsWith('/login')) { mostrarLogin(); throw new Error('Faça login.'); }
-  if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão.');
+  if (!r.ok) throw Object.assign(new Error(corpo.erro || 'Erro de conexão.'), { status: r.status });
   return corpo;
 }
 const post = (url, body, method = 'POST') => api(url, { method, body: JSON.stringify(body || {}) });
+
+// Aprovar, recusar ou desfazer. Se outra aba já mudou a despesa (409), atualiza a tela antes do aviso.
+async function avaliarDespesa(id, acao) {
+  try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); }
+  catch (e) { if (e.status === 409) { await carregar(); fecharModal(); desenharTela(); } throw e; }
+  await carregar();
+}
 
 async function carregar() {
   D = await api('/api/admin/dados');
@@ -50,20 +57,21 @@ async function carregar() {
   $('nav-pend').classList.toggle('hidden', !pend);
 }
 
-// Linhas da tabela de lançamentos: prestações do painel + despesas aprovadas do app (somadas por colaborador e mês)
+// Linhas da tabela de lançamentos: prestações do painel + despesas aprovadas do app (somadas por colaborador,
+// mês e função: se o colaborador mudou de função no meio do mês, cada parte fica na função em que foi lançada)
 function linhas() {
   const zeros = () => Object.fromEntries(CAT.map(c => [c.chave, 0]));
   const rows = D.prestacoes.map(p => ({ ...p, origem: 'painel', valores: Object.fromEntries(CAT.map(c => [c.chave, p[c.chave]])) }));
   const g = new Map();
   for (const d of D.despesas.filter(x => x.status === 'Aprovada')) {
-    const mes = d.data.slice(0, 7), k = d.colaboradorId + '|' + mes;
+    const mes = d.data.slice(0, 7), k = d.colaboradorId + '|' + mes + '|' + d.funcao;
     let r = g.get(k);
     if (!r) {
       r = { id: 'app|' + k, origem: 'app', colaboradorId: d.colaboradorId, colaborador: d.colaborador, funcao: d.funcao, dataInicial: d.data, dataFinal: d.data, mesRef: mes, valores: zeros(), total: 0, observacao: 'Despesas do app', despesas: [] };
       g.set(k, r);
     }
     if (d.data < r.dataInicial) r.dataInicial = d.data;
-    if (d.data > r.dataFinal) r.dataFinal = d.data;
+    if (d.data >= r.dataFinal) { r.dataFinal = d.data; r.colaborador = d.colaborador; } // nome mais recente
     const ck = (CAT.find(c => c.nome === d.categoria) || CAT[CAT.length - 1]).chave;
     r.valores[ck] = r2(r.valores[ck] + d.valor);
     r.total = r2(r.total + d.valor);
@@ -77,14 +85,17 @@ const somar = rows => {
   for (const r of rows) { for (const c of CAT) v[c.chave] = r2(v[c.chave] + (r.valores[c.chave] || 0)); total = r2(total + r.total); }
   return { v, total };
 };
-function anos() {
+function anos(atual) {
   const s = new Set([hoje().slice(0, 4)]);
+  if (atual) s.add(String(atual)); // o ano escolhido continua na lista mesmo que fique sem lançamentos
   linhas().forEach(r => s.add(r.mesRef.slice(0, 4)));
   return [...s].sort().reverse();
 }
 const opt = (v, txt, sel) => `<option value="${esc(v)}"${String(v) === String(sel) ? ' selected' : ''}>${esc(txt)}</option>`;
-const optsAno = sel => anos().map(a => opt(a, a, sel)).join('');
+const optsAno = sel => anos(sel).map(a => opt(a, a, sel)).join('');
 const optsMes = (sel, todos = true) => (todos ? opt('', 'Todos', sel) : '') + MESES.map((m, i) => opt(String(i + 1).padStart(2, '0'), m, sel)).join('');
+// Funções para os filtros: as cadastradas + as que aparecem em lançamentos antigos (função já excluída)
+const funcoesFiltro = () => [...new Set([...D.funcoes, ...linhas().map(r => r.funcao).filter(Boolean)])];
 const corFuncao = f => CORES_FUNCAO[Math.max(0, D.funcoes.indexOf(f)) % CORES_FUNCAO.length];
 
 // Exportação para Excel (.xlsx): ver public/xlsx.js. A última linha (total) sai em negrito.
@@ -139,13 +150,13 @@ function telaLancamentos() {
     <div class="card filters" style="grid-template-columns:110px 150px 1fr 1fr 1.4fr">
       <div class="field"><label>Ano</label><select class="input" id="l-ano">${optsAno(f.ano)}</select></div>
       <div class="field"><label>Mês de referência</label><select class="input" id="l-mes">${optsMes(f.mes)}</select></div>
-      <div class="field"><label>Função</label><select class="input" id="l-func">${opt('', 'Todas', f.funcao)}${D.funcoes.map(x => opt(x, x, f.funcao)).join('')}</select></div>
+      <div class="field"><label>Função</label><select class="input" id="l-func">${opt('', 'Todas', f.funcao)}${funcoesFiltro().map(x => opt(x, x, f.funcao)).join('')}</select></div>
       <div class="field"><label>Colaborador</label><select class="input" id="l-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
       <div class="field"><label>Buscar</label><input class="input" id="l-busca" placeholder="Nome ou observação" value="${esc(f.busca)}"></div>
     </div>
     <div class="kpis">
       <div class="card kpi"><span class="l">Total ${f.mes ? 'do mês' : 'do ano'}</span><span class="v">${brl(s.total)}</span></div>
-      <div class="card kpi"><span class="l">Prestações lançadas</span><span class="v">${rows.length}</span></div>
+      <div class="card kpi"><span class="l">Prestações lançadas</span><span class="v">${rows.filter(r => r.origem === 'painel').length}</span></div>
       <div class="card kpi"><span class="l">Colaboradores</span><span class="v">${nColab}</span></div>
       <div class="card kpi"><span class="l">Maior categoria</span><span class="v sm">${maior && maior.v ? `${esc(maior.nome)} · ${brl(maior.v)}` : '—'}</span></div>
     </div>
@@ -169,7 +180,7 @@ function telaLancamentos() {
     const id = b.dataset.ap || b.dataset.rc, acao = b.dataset.ap ? 'aprovar' : 'recusar';
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
     b.disabled = true;
-    try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); await carregar(); telaLancamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); b.disabled = false; }
+    try { await avaliarDespesa(id, acao); telaLancamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); b.disabled = false; }
   }));
   document.querySelectorAll('[data-nota]').forEach(b => b.addEventListener('click', () => modalNota(D.despesas.find(d => d.id === b.dataset.nota))));
   document.querySelectorAll('tr[data-row]').forEach(tr => tr.addEventListener('click', () => {
@@ -230,7 +241,7 @@ function modalNota(d, voltar) {
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
     if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
     botao.disabled = true;
-    try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); fecharModal(); desenharTela(); }
+    try { await avaliarDespesa(d.id, acao); fecharModal(); desenharTela(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
@@ -335,7 +346,7 @@ function telaDespesas() {
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
     if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
     b.disabled = true;
-    try { await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/${acao}`); await carregar(); telaDespesas(); }
+    try { await avaliarDespesa(d.id, acao); telaDespesas(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); b.disabled = false; }
   }));
   agir('data-dap', 'aprovar'); agir('data-drc', 'recusar'); agir('data-dre', 'reabrir');
@@ -376,7 +387,7 @@ function mesesEntre(a, b) {
   const out = [];
   let y = Number(a.slice(0, 4)), m = Number(a.slice(5, 7));
   const fim = b && b >= a ? b.slice(0, 7) : a.slice(0, 7);
-  while (out.length < 12) {
+  while (out.length < 120) { // limite só de segurança; o servidor aceita qualquer mês do período
     const ym = y + '-' + String(m).padStart(2, '0');
     out.push(ym);
     if (ym >= fim) break;
@@ -574,8 +585,9 @@ function telaFuncao() {
   }).sort((a, b) => b.total - a.total);
   const dist = CAT.map((c, i) => ({ ...c, v: s.v[c.chave], cor: CORES_CAT[i] })).sort((a, b) => b.v - a.v);
   const maxD = Math.max(...dist.map(d => d.v), 1);
-  const porColab = [...new Set(rows.map(r => r.colaboradorId))].map(id => {
-    const rr = rows.filter(r => r.colaboradorId === id);
+  // Uma linha por colaborador e função (quem mudou de função aparece em cada uma, com o valor de cada)
+  const porColab = [...new Set(rows.map(r => r.colaboradorId + '|' + r.funcao))].map(k => {
+    const rr = rows.filter(r => r.colaboradorId + '|' + r.funcao === k);
     return { nome: rr[0].colaborador, funcao: rr[0].funcao, ...somar(rr) };
   }).sort((a, b) => b.total - a.total);
   const periodo = f.mes ? MESES[Number(f.mes) - 1].toLowerCase() : f.ano;
@@ -586,7 +598,7 @@ function telaFuncao() {
     <div class="card filters" style="grid-template-columns:110px 160px 200px">
       <div class="field"><label>Ano</label><select class="input" id="f-ano">${optsAno(f.ano)}</select></div>
       <div class="field"><label>Mês de referência</label><select class="input" id="f-mes">${optsMes(f.mes)}</select></div>
-      <div class="field"><label>Função</label><select class="input" id="f-func">${opt('', 'Todas', f.funcao)}${D.funcoes.map(x => opt(x, x, f.funcao)).join('')}</select></div>
+      <div class="field"><label>Função</label><select class="input" id="f-func">${opt('', 'Todas', f.funcao)}${funcoesFiltro().map(x => opt(x, x, f.funcao)).join('')}</select></div>
     </div>
     <div class="func-grid">
       ${cards.map(c => `<div class="card func-card"><span class="muted small">${esc(c.fn)}</span><span class="v">${brl(c.total)}</span>
