@@ -18,7 +18,8 @@ const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st ===
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
 const fotoVersao = {}; // muda o endereço da imagem depois de trocar a foto (evita mostrar a antiga do cache)
-const urlFoto = d => `/api/despesas/${encodeURIComponent(d.id)}/foto${fotoVersao[d.id] ? '?v=' + fotoVersao[d.id] : ''}`;
+// d.fotoV vem do servidor e muda quando a foto é trocada (vale também em outro aparelho)
+const urlFoto = d => { const v = fotoVersao[d.id] || d.fotoV; return `/api/despesas/${encodeURIComponent(d.id)}/foto${v ? '?v=' + v : ''}`; };
 
 // App aberto pelo ícone da tela inicial (não mostra a dica de instalar)
 const instalado = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
