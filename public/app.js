@@ -115,6 +115,7 @@ function telaLogin() {
 // "recebidas" vem preenchida só pela atualização automática (os botões chamam sem argumento)
 async function telaInicio(recebidas) {
   despesas = Array.isArray(recebidas) ? recebidas : await api('/api/despesas');
+  if (!me) return; // saiu (botão Sair) enquanto a lista carregava
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   if (mesSel !== 'todas' && !meses.includes(mesSel)) mesSel = hoje().slice(0, 7); // título e seletor sempre no mesmo mês
