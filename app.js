@@ -135,7 +135,10 @@ const publicoDesp = d => ({ ...d, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
 // Comprovantes da prestação: várias fotos, guardadas como referências separadas por "|" na coluna Fotos
 const MAX_FOTOS_PREST = 10;
 const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
-const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length });
+// fotosV: versão de cada comprovante (resumo da referência). O painel remove/abre pela versão, não só pela
+// posição, para uma aba desatualizada não apagar a foto errada.
+const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length, fotosV: refsPrest(p).map(versaoFoto) });
+const posFoto = (refs, n, v) => (v ? refs.findIndex(r => versaoFoto(r) === v) : Number(n));
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
 
 // Bloqueio simples contra tentativas de adivinhar senha. Dois contadores:
@@ -458,16 +461,20 @@ app.post('/api/admin/prestacoes/:id/fotos', exigeAdmin, wrap(async (req, res) =>
   res.status(201).json(publicoPrest(atual));
 }));
 app.get('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
-  const ref = refsPrest(await acharPrest(req.params.id))[Number(req.params.n)];
+  const refs = refsPrest(await acharPrest(req.params.id)), ref = refs[posFoto(refs, req.params.n, String(req.query.v || ''))];
   if (!ref) return erro(res, 'Foto não encontrada.', 404);
   enviarFotoRef(res, ref);
 }));
 app.delete('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
   const p = await acharPrest(req.params.id);
-  const refs = refsPrest(p), n = Number(req.params.n);
-  if (!refs[n]) return erro(res, 'Foto não encontrada.', 404);
+  const refs = refsPrest(p), v = String(req.query.v || ''), n = posFoto(refs, req.params.n, v);
+  if (!refs[n]) return v ? erro(res, 'Esta foto já foi removida ou a lista mudou em outra tela. A lista foi atualizada; confira antes de remover.', 409) : erro(res, 'Foto não encontrada.', 404);
+  const antes = p.fotos;
   const [removida] = refs.splice(n, 1);
-  const atual = await store.update('Prestacoes', p.id, { fotos: refs.join('|') });
+  // só grava se ninguém mudou os comprovantes entre a leitura e a gravação
+  const atual = await store.update('Prestacoes', p.id, { fotos: refs.join('|') }, a => String(a.fotos || '') === String(antes || ''));
+  if (atual === false) return erro(res, 'A lista de fotos mudou em outra tela. A lista foi atualizada; confira antes de remover.', 409);
+  if (!atual) return erro(res, 'Prestação não encontrada.', 404);
   apagarFoto(removida);
   res.json(publicoPrest(atual));
 }));

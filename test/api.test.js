@@ -328,3 +328,28 @@ test('foto trocada muda a versão (fotoV) para o painel não mostrar a antiga do
   assert.equal(img.status, 200);
   assert.equal(img.dados[img.dados.length - 1], 9); // é a foto nova
 });
+
+test('comprovante: remover pela versão; aba desatualizada não apaga a foto errada (409)', async () => {
+  const a = await adminLogado();
+  const { id: colaboradorId } = await novoColaborador(a);
+  const p = (await a.post('/api/admin/prestacoes', { colaboradorId, dataInicial: ontem(), dataFinal: ontem(), mesRef: ontem().slice(0, 7), hotel: 10 })).dados;
+  const foto = n => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, n)]).toString('base64');
+  let r;
+  for (const n of [1, 2, 3]) r = await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: foto(n) });
+  const [vVerm, vAzul, vVerde] = r.dados.fotosV;
+  assert.equal(r.dados.fotosV.length, 3);
+  // aba B remove a 1ª (vermelha)
+  r = await a.del(`/api/admin/prestacoes/${p.id}/fotos/0?v=${vVerm}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.dados.fotosV, [vAzul, vVerde]);
+  // aba A (desatualizada) tenta remover a azul pela posição antiga 1: remove a azul, não a verde
+  r = await a.del(`/api/admin/prestacoes/${p.id}/fotos/1?v=${vAzul}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.dados.fotosV, [vVerde]);
+  // tentar remover de novo a vermelha (já removida) → conflito
+  assert.equal((await a.del(`/api/admin/prestacoes/${p.id}/fotos/0?v=${vVerm}`)).status, 409);
+  // abrir pela versão entrega a foto certa
+  const img = await a.get(`/api/admin/prestacoes/${p.id}/fotos/0?v=${vVerde}`);
+  assert.equal(img.status, 200);
+  assert.equal(img.dados[img.dados.length - 1], 3);
+});

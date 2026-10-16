@@ -217,13 +217,16 @@ tr.off td { color: var(--muted); }
 .rows { display: flex; flex-direction: column; }
 .rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
 .rows > div:last-child { border-bottom: 0; }
-.rows > div > span:last-child { white-space: nowrap; }
+.rows > div > span { min-width: 0; overflow-wrap: anywhere; } /* texto longo (ex.: observação) quebra linha em vez de estourar a tela */
+.rows > div > span:first-child { flex-shrink: 0; }          /* rótulo (Categoria, Valor...) não encolhe */
+.rows > div > span.desc { flex-shrink: 1; }                 /* descrição das listas encolhe e quebra */
+.rows > div > span.valor { white-space: nowrap; flex-shrink: 0; } /* valor (R$ 10,00) não quebra em duas linhas */
 /* resumos: valor clicável abre o detalhe */
 /* parece um quadrado selecionável: ao passar o mouse destaca, ao clicar fica marcado (o último aberto) */
 td.cel-click { cursor: pointer; transition: background .12s, box-shadow .12s; }
 td.cel-click:hover { background: var(--primary-soft); color: var(--primary-dark); box-shadow: inset 0 0 0 1px var(--primary); }
 td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: var(--primary-dark); font-weight: 700; box-shadow: inset 0 0 0 2px var(--primary); }
-.det-cat { display: flex; justify-content: space-between; font-size: 13px; margin: 2px 2px -6px; } /* valor (R$ 10,00) não quebra em duas linhas */
+.det-cat { display: flex; justify-content: space-between; font-size: 13px; margin: 2px 2px -6px; }
 .rows span:first-child { color: var(--muted); }
 .rows span:last-child { font-weight: 600; text-align: right; }
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }
