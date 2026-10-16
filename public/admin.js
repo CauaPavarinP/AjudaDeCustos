@@ -42,10 +42,16 @@ async function api(url, opts = {}) {
 }
 const post = (url, body, method = 'POST') => api(url, { method, body: JSON.stringify(body || {}) });
 
-// Aprovar, recusar ou desfazer. Se outra aba já mudou a despesa (409), atualiza a tela antes do aviso.
+// Aprovar, recusar ou desfazer. Se outra aba já mudou a despesa (409) ou o colaborador a excluiu (404),
+// atualiza a tela antes do aviso.
+const MSG_EXCLUIDA = 'O colaborador excluiu esta despesa pelo celular. A lista foi atualizada.';
 async function avaliarDespesa(id, acao) {
   try { await post(`/api/admin/despesas/${encodeURIComponent(id)}/${acao}`); }
-  catch (e) { if (e.status === 409) { await carregar(); fecharModal(); desenharTela(); } throw e; }
+  catch (e) {
+    if (e.status === 409 || e.status === 404) { await carregar(); fecharModal(); desenharTela(); }
+    if (e.status === 404) throw new Error(MSG_EXCLUIDA);
+    throw e;
+  }
   await carregar();
 }
 
@@ -279,6 +285,13 @@ function modalNota(d, voltar) {
     img.onerror = () => { m.querySelector('#m-img').innerHTML = '<span class="sem">Não foi possível carregar a foto. Tente de novo em instantes.</span>'; };
   }
   m.querySelector('#m-fechar').onclick = () => (voltar ? voltar() : fecharModal());
+  // Confere na hora se a despesa ainda existe (o colaborador pode tê-la excluído depois da última atualização)
+  const antes = JSON.stringify(D);
+  carregar().then(() => {
+    if (JSON.stringify(D) !== antes) telaDesatualizada = true; // a tela de fundo é redesenhada quando a janela fechar
+    if (D.despesas.some(x => x.id === d.id)) return;
+    fecharModal(); desenharTela(); avisar(MSG_EXCLUIDA, 'Despesa excluída');
+  }).catch(() => { /* sem conexão: segue com os dados que já tem */ });
   const decidir = acao => async e => {
     const botao = e.currentTarget; // guardado antes do await (depois dele o evento já não aponta para o botão)
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
@@ -793,6 +806,7 @@ function render() {
   window.scrollTo(0, 0);
   telaDesatualizada = false;
   desenharTela();
+  atualizarSozinho(); // ao trocar de tela, busca os dados de novo (redesenha só se algo mudou)
 }
 window.addEventListener('hashchange', render);
 
