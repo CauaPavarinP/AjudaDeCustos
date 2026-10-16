@@ -101,8 +101,12 @@ tr.off td { color: var(--muted); }
 .tag-app { font-size: 10px; font-weight: 600; color: var(--primary); background: var(--primary-soft); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
 .pend { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-color: #fde68a; background: #fffdf5; }
 .pend h3 { margin: 0; font-size: 14px; }
-.pend-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr 2fr auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
+.pend-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
 .pend-row .acts { display: flex; gap: 6px; }
+.pend-row > span { min-width: 0; overflow-wrap: anywhere; } /* texto longo sem espaço não empurra a tela */
+/* observação longa: mostra até 3 linhas (o texto inteiro aparece ao passar o mouse e no "Ver nota") */
+.obs-txt { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+td.obs-col { min-width: 140px; max-width: 280px; }
 /* nova prestação */
 .form-grid { display: grid; grid-template-columns: 1fr 340px; gap: 18px; align-items: start; }
 .form-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
@@ -160,7 +164,7 @@ tr.off td { color: var(--muted); }
 @media (max-width: 1100px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
-  .pend-row { grid-template-columns: 1fr 1fr; }
+  .pend-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }
