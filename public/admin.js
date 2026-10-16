@@ -143,7 +143,7 @@ function telaLancamentos() {
         <span><b>${esc(d.colaborador)}</b><br><span class="muted small">${esc(d.funcao)}</span></span>
         <span>${esc(d.categoria)}<br><span class="muted small">${dmy(d.data)}</span></span>
         <span class="num"><b>${brl(d.valor)}</b></span>
-        <span class="muted">${esc(d.observacao) || '—'}</span>
+        <span class="muted obs-txt" title="${esc(d.observacao)}">${esc(d.observacao) || '—'}</span>
         <span class="acts"><button class="btn xs ok" data-ap="${esc(d.id)}">Aprovar</button><button class="btn xs no" data-rc="${esc(d.id)}">Recusar</button></span>
         <span><button class="btn xs" data-nota="${esc(d.id)}" title="${d.foto ? 'Ver a foto da nota e analisar' : 'Esta despesa foi enviada sem foto'}">${d.foto ? '📷 Ver nota' : 'Sem foto'}</button></span></div>`).join('')}
     </div>` : ''}
@@ -366,7 +366,7 @@ function telaDespesas() {
         <td>${dmy(d.data)}</td>
         <td class="b">${esc(d.colaborador)}<br><span class="muted small" style="font-weight:400">${esc(d.funcao)}</span></td>
         <td>${esc(d.categoria)}</td><td class="num b">${fmt(d.valor)}</td>
-        <td class="muted">${esc(d.observacao) || '—'}</td>
+        <td class="muted obs-col"><div class="obs-txt" title="${esc(d.observacao)}">${esc(d.observacao) || '—'}</div></td>
         <td><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span>${d.avaliadoEm ? `<br><span class="muted small">${quando(d.avaliadoEm)}</span>` : ''}</td>
         <td>${d.foto ? '📷' : '<span class="muted small">—</span>'}</td>
         <td><span class="chips">${d.status === 'Em análise'
