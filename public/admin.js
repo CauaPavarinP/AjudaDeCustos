@@ -197,7 +197,7 @@ function telaLancamentos() {
 function modalDespesasApp(r) {
   const m = abrirModal(`<h3>${esc(r.colaborador)} · despesas do app</h3>
     <p class="muted small" style="margin:0">${nomeMes(r.mesRef)} · somente despesas aprovadas</p>
-    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span>${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}${d.foto ? ` <button class="link tag-foto" data-nota="${esc(d.id)}">📷 ver nota</button>` : ''}</span><span>${brl(d.valor)}</span></div>`).join('')}</div>
+    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}${d.foto ? ` <button class="link tag-foto" data-nota="${esc(d.id)}">📷 ver nota</button>` : ''}</span><span class="valor">${brl(d.valor)}</span></div>`).join('')}</div>
     <div class="acts"><button class="btn secondary" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = fecharModal;
   m.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => modalNota(D.despesas.find(d => d.id === b.dataset.nota), () => modalDespesasApp(r)));
@@ -220,8 +220,8 @@ function modalDetalhe(titulo, sub, rows, chaves) {
   }).filter(s => s.itens.length);
   const total = r2(secoes.reduce((s, x) => s + x.total, 0));
   const linha = i => i.app
-    ? `<div><span>${dmy(i.data)} · ${esc(i.app.observacao || i.app.categoria)}${i.app.foto ? ` <button class="link tag-foto" data-nota="${esc(i.app.id)}">📷 ver nota</button>` : ''}<br><span class="muted small">Despesa do celular</span></span><span>${brl(i.valor)}</span></div>`
-    : `<div><span>${dm(i.prest.dataInicial)}${i.prest.dataInicial.slice(0, 4) !== i.prest.dataFinal.slice(0, 4) ? '/' + i.prest.dataInicial.slice(0, 4) : ''} a ${dmy(i.prest.dataFinal)}${i.prest.observacao ? ' · ' + esc(i.prest.observacao) : ''}${i.prest.fotos ? ` <span class="tag-foto">📎${i.prest.fotos}</span>` : ''} <button class="link tag-foto" data-prest="${esc(i.prest.id)}">abrir</button><br><span class="muted small">Prestação do painel · mês ref. ${nomeMes(i.prest.mesRef)}</span></span><span>${brl(i.valor)}</span></div>`;
+    ? `<div><span class="desc">${dmy(i.data)} · ${esc(i.app.observacao || i.app.categoria)}${i.app.foto ? ` <button class="link tag-foto" data-nota="${esc(i.app.id)}">📷 ver nota</button>` : ''}<br><span class="muted small">Despesa do celular</span></span><span class="valor">${brl(i.valor)}</span></div>`
+    : `<div><span class="desc">${dm(i.prest.dataInicial)}${i.prest.dataInicial.slice(0, 4) !== i.prest.dataFinal.slice(0, 4) ? '/' + i.prest.dataInicial.slice(0, 4) : ''} a ${dmy(i.prest.dataFinal)}${i.prest.observacao ? ' · ' + esc(i.prest.observacao) : ''}${i.prest.fotos ? ` <span class="tag-foto">📎${i.prest.fotos}</span>` : ''} <button class="link tag-foto" data-prest="${esc(i.prest.id)}">abrir</button><br><span class="muted small">Prestação do painel · mês ref. ${nomeMes(i.prest.mesRef)}</span></span><span class="valor">${brl(i.valor)}</span></div>`;
   const reabrir = () => modalDetalhe(titulo, sub, rows, chaves);
   const m = abrirModal(`<h3>${esc(titulo)}</h3>
     <p class="muted small" style="margin:0">${esc(sub)} · somente despesas aprovadas · total <b>${brl(total)}</b></p>
@@ -507,26 +507,29 @@ function telaNova(id) {
   meses(p ? p.mesRef : '');
 
   // ---- comprovantes: fotos já salvas (no servidor) + fotos novas (enviadas ao salvar) ----
-  let salvas = p ? p.fotos || 0 : 0, versao = Date.now();
+  let salvasV = p ? p.fotosV || [] : []; // versão de cada comprovante já salvo (muda se a foto mudar)
   const novas = [];
-  const urlSalva = i => `/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}?v=${versao}`;
-  const todasFotos = () => [...Array.from({ length: salvas }, (_, i) => urlSalva(i)), ...novas];
+  const urlSalva = i => `/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}?v=${salvasV[i]}`;
+  const todasFotos = () => [...salvasV.map((_, i) => urlSalva(i)), ...novas];
   const desenhaFotos = () => {
     if (!$('n-fotos')) return;
     $('n-fotos').innerHTML = todasFotos().map((src, i) => `<div class="thumb">
       <img src="${src}" alt="Comprovante ${i + 1}" data-ver="${i}">
-      ${i >= salvas ? '<span class="thumb-nova">nova</span>' : ''}
+      ${i >= salvasV.length ? '<span class="thumb-nova">nova</span>' : ''}
       <button type="button" class="x" data-rm="${i}" title="Remover" aria-label="Remover foto ${i + 1}">×</button></div>`).join('')
       || '<span class="muted small">Nenhuma foto anexada.</span>';
     $('n-fotos').querySelectorAll('[data-ver]').forEach(im => im.onclick = () => verFotos(todasFotos(), Number(im.dataset.ver)));
     $('n-fotos').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
       const i = Number(b.dataset.rm);
-      if (i >= salvas) { novas.splice(i - salvas, 1); return desenhaFotos(); }
+      if (i >= salvasV.length) { novas.splice(i - salvasV.length, 1); return desenhaFotos(); }
       if (!(await confirmar('A foto sai desta prestação e é apagada.', { titulo: 'Remover comprovante?', ok: 'Remover', perigo: true }))) return;
       try {
-        const r = await api(`/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}`, { method: 'DELETE' });
-        salvas = r.fotos; versao = Date.now(); desenhaFotos();
-      } catch (e) { avisar(e.message, 'Não foi possível remover'); }
+        const r = await api(`/api/admin/prestacoes/${encodeURIComponent(p.id)}/fotos/${i}?v=${salvasV[i]}`, { method: 'DELETE' });
+        salvasV = r.fotosV || []; desenhaFotos();
+      } catch (e) {
+        if (e.status === 409) { await carregar(); const atual = D.prestacoes.find(x => x.id === p.id); salvasV = (atual && atual.fotosV) || []; desenhaFotos(); }
+        avisar(e.message, 'Não foi possível remover');
+      }
     });
   };
   if ($('n-add-foto')) $('n-add-foto').onclick = () => {
@@ -534,7 +537,7 @@ function telaNova(id) {
     inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
     inp.onchange = async () => {
       const arquivos = [...(inp.files || [])];
-      const vagas = 10 - salvas - novas.length;
+      const vagas = 10 - salvasV.length - novas.length;
       if (arquivos.length > vagas) avisar(`Cada prestação aceita até 10 fotos. ${vagas > 0 ? `Só ${vagas} foram adicionadas.` : 'Remova alguma antes de anexar outra.'}`, 'Limite de fotos');
       for (const arq of arquivos.slice(0, Math.max(0, vagas))) {
         try { novas.push(await comprimirFoto(arq)); } catch (e) { avisar(`${arq.name}: ${e.message}`, 'Foto não adicionada'); }

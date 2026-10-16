@@ -17,9 +17,9 @@ const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st ===
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
-const fotoVersao = {}; // muda o endereço da imagem depois de trocar a foto (evita mostrar a antiga do cache)
-// d.fotoV vem do servidor e muda quando a foto é trocada (vale também em outro aparelho)
-const urlFoto = d => { const v = fotoVersao[d.id] || d.fotoV; return `/api/despesas/${encodeURIComponent(d.id)}/foto${v ? '?v=' + v : ''}`; };
+// d.fotoV vem do servidor e muda quando a foto é trocada (aqui ou em outro aparelho): vai no endereço da
+// imagem para o navegador não mostrar a foto antiga guardada em cache
+const urlFoto = d => `/api/despesas/${encodeURIComponent(d.id)}/foto${d.fotoV ? '?v=' + d.fotoV : ''}`;
 
 // App aberto pelo ícone da tela inicial (não mostra a dica de instalar)
 const instalado = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -87,6 +87,7 @@ document.querySelectorAll('#tabbar button').forEach(b => b.addEventListener('cli
 function telaLogin() {
   telaAtual = 'login';
   me = null;
+  mesSel = hoje().slice(0, 7); // o próximo usuário começa no mês atual
   mostrar(`
     <div class="login-brand"><div class="logo-rs">R$</div><h1>Ajuda de Custo</h1><span class="muted small">101 do Brasil · área do colaborador</span></div>
     <form id="f-login" style="display:flex;flex-direction:column;gap:12px">
@@ -116,6 +117,7 @@ async function telaInicio(recebidas) {
   despesas = Array.isArray(recebidas) ? recebidas : await api('/api/despesas');
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
+  if (mesSel !== 'todas' && !meses.includes(mesSel)) mesSel = hoje().slice(0, 7); // título e seletor sempre no mesmo mês
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
   const total = lista.filter(d => d.status !== 'Recusada').reduce((s, d) => s + d.valor, 0); // recusadas não contam
   const aprov = lista.filter(d => d.status === 'Aprovada').length, anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
@@ -249,7 +251,6 @@ function telaDetalhe(d) {
     $('d-foto').innerHTML = '<div class="foto-vazia">Enviando foto...</div>';
     try {
       const nova = await api('/api/despesas/' + encodeURIComponent(d.id) + '/foto', { method: 'PUT', body: JSON.stringify({ foto: f }) });
-      fotoVersao[d.id] = Date.now();
       despesas = despesas.map(x => (x.id === nova.id ? nova : x));
       telaDetalhe(nova);
     } catch (err) { telaDetalhe(d); erro('d-erro-foto', err.message); }
