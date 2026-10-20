@@ -9,6 +9,7 @@ const dm = s => s.slice(8, 10) + '/' + s.slice(5, 7);
 const dmy = s => (s ? dm(s) + '/' + s.slice(0, 4) : '');
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const MES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 const nomeMes = ym => MESES[Number(ym.slice(5, 7)) - 1] + '/' + ym.slice(0, 4);
 const hoje = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -713,9 +714,10 @@ function pdfPrestacao(colab, ano, rows, mes = '') {
     doc.texto(E, 80, 'PRESTAÇÃO DE CONTAS', { tam: 20, negrito: true });
     campo('PERÍODO', 125, `${MESES[i].toUpperCase()} / ${ano}`, 360);
     campo('NOME', 152, colab.nome);
-    campo('TELEFONE', 179, '');
-    campo('CIDADE', 206, '', 390);
+    campo('TELEFONE', 179, colab.telefone);
+    campo('CIDADE', 206, colab.cidade, 390);
     doc.texto(445, 206, 'UF :', { tam: 13, negrito: true, alinhar: 'dir' });
+    doc.texto(455, 206, colab.uf || '', { tam: 12 });
     doc.linha(450, 211, DIR, 211, { larg: 0.6 });
 
     // Quadro Descrição | Valor
@@ -749,15 +751,17 @@ function telaColaboradores() {
     <div class="card filters"><span class="muted small">Funções cadastradas</span>
       <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}<button class="x" data-delf="${esc(f)}" title="Excluir função" aria-label="Excluir função ${esc(f)}">×</button></span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
     <div class="card table-card"><div class="table-wrap"><table>
-      <thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Status</th><th>Ações</th></tr></thead>
+      <thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Telefone</th><th>Cidade / UF</th><th>Status</th><th>Ações</th></tr></thead>
       <tbody>${D.colaboradores.map(c => `<tr class="${c.ativo ? '' : 'off'}">
         <td class="b">${esc(c.nome)}</td><td>${esc(c.usuario)}</td>
         <td><span class="badge ${corFuncao(c.funcao)}">${esc(c.funcao)}</span></td>
+        <td>${esc(c.telefone) || '<span class="muted">—</span>'}</td>
+        <td>${esc([c.cidade, c.uf].filter(Boolean).join(' / ')) || '<span class="muted">—</span>'}</td>
         <td><span class="badge ${c.ativo ? 'b-green' : 'b-gray'}">${c.ativo ? 'Ativo' : 'Inativo'}</span></td>
         <td><span class="chips">${c.ativo
           ? `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-pw="${esc(c.id)}">Nova senha</button><button class="btn xs" data-off="${esc(c.id)}">Desativar</button>`
           : `<button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
-        || '<tr class="empty-row"><td colspan="5">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
+        || '<tr class="empty-row"><td colspan="7">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
     </table></div></div>`;
 
   $('k-novo').onclick = () => modalColab();
@@ -792,8 +796,8 @@ function baixarBackup() {
   const sim = b => (b ? 'Sim' : 'Não');
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
   baixarXlsx(`backup-ajuda-de-custo-${hoje()}`, [
-    { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Ativo', 7), col('Criado em', 18)],
-      linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, sim(c.ativo), quando(c.criadoEm)]) },
+    { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Telefone', 16), col('Cidade', 20), col('UF', 5), col('Ativo', 7), col('Criado em', 18)],
+      linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, c.telefone, c.cidade, c.uf, sim(c.ativo), quando(c.criadoEm)]) },
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
     { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
       linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
@@ -808,6 +812,11 @@ function modalColab(c) {
     <div class="field"><label>Nome</label><input class="input" id="m-nome" maxlength="80" value="${c ? esc(c.nome) : ''}"></div>
     <div class="field"><label>Usuário (para entrar no app)</label><input class="input" id="m-user" maxlength="30" value="${c ? esc(c.usuario) : ''}" placeholder="ex.: joao.silva"></div>
     <div class="field"><label>Função</label><select class="input" id="m-func">${opt('', 'Selecione', '')}${D.funcoes.map(f => opt(f, f, c ? c.funcao : '')).join('')}</select></div>
+    <div class="field"><label>Telefone <span class="muted small">(opcional)</span></label><input class="input" id="m-tel" maxlength="20" inputmode="tel" value="${c ? esc(c.telefone) : ''}" placeholder="ex.: (47) 99999-9999"></div>
+    <div class="row2" style="grid-template-columns:1fr 110px">
+      <div class="field"><label>Cidade <span class="muted small">(opcional)</span></label><input class="input" id="m-cid" maxlength="60" value="${c ? esc(c.cidade) : ''}" placeholder="ex.: Porto Alegre"></div>
+      <div class="field"><label>UF</label><select class="input" id="m-uf">${opt('', '—', '')}${UFS.map(u => opt(u, u, c ? c.uf : '')).join('')}</select></div>
+    </div>
     ${c ? '' : '<span class="muted small">A senha inicial é gerada automaticamente e aparece depois de salvar.</span>'}
     <div id="m-erro" class="alert hidden"></div>
     <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Salvar</button></div>`);
@@ -817,7 +826,8 @@ function modalColab(c) {
   m.querySelector('#m-nome').addEventListener('input', e => { if (!mexeuUser) user.value = sugestao(e.target.value); });
   m.querySelector('#m-cancel').onclick = fecharModal;
   m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
-    const corpo = { nome: m.querySelector('#m-nome').value, usuario: user.value, funcao: m.querySelector('#m-func').value };
+    const corpo = { nome: m.querySelector('#m-nome').value, usuario: user.value, funcao: m.querySelector('#m-func').value,
+      telefone: m.querySelector('#m-tel').value, cidade: m.querySelector('#m-cid').value, uf: m.querySelector('#m-uf').value };
     try {
       const r = c ? await post('/api/admin/colaboradores/' + encodeURIComponent(c.id), corpo, 'PUT') : await post('/api/admin/colaboradores', corpo);
       await carregar(); telaColaboradores();

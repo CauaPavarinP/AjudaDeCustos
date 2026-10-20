@@ -139,7 +139,9 @@ const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
 // posição, para uma aba desatualizada não apagar a foto errada.
 const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length, fotosV: refsPrest(p).map(versaoFoto) });
 const posFoto = (refs, n, v) => (v ? refs.findIndex(r => versaoFoto(r) === v) : Number(n));
-const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm });
+const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm,
+  telefone: c.telefone || '', cidade: c.cidade || '', uf: c.uf || '' });
+const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
 // Bloqueio simples contra tentativas de adivinhar senha. Dois contadores:
 // - por aparelho (IP) + conta: 5 erros bloqueiam aquele aparelho por 10 minutos;
@@ -347,13 +349,16 @@ async function validarColab(body, idAtual) {
   const nome = texto(body.nome, 80);
   const usuario = texto(body.usuario, 30).toLowerCase();
   const funcao = texto(body.funcao, 40);
+  // Telefone, cidade e UF são opcionais (saem na folha "Prestação de contas" em PDF)
+  const telefone = texto(body.telefone, 20), cidade = texto(body.cidade, 60), uf = texto(body.uf, 2).toUpperCase();
   if (nome.length < 2) return { erro: 'Informe o nome.' };
+  if (uf && !UFS.includes(uf)) return { erro: 'Escolha a UF da lista.' };
   if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
   const funcoes = (await store.list('Funcoes')).map(f => f.nome);
   if (!funcoes.includes(funcao)) return { erro: 'Escolha uma função cadastrada.' };
   const todos = await store.list('Colaboradores');
   if (todos.some(c => c.usuario === usuario && c.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
-  return { nome, usuario, funcao };
+  return { nome, usuario, funcao, telefone, cidade, uf };
 }
 
 app.post('/api/admin/colaboradores', exigeAdmin, wrap(async (req, res) => {

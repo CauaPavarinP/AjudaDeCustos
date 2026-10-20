@@ -7,7 +7,8 @@ const crypto = require('crypto');
 // Cada tabela: [chave no código, título da coluna na planilha]
 const TABELAS = {
   Colaboradores: {
-    cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm']],
+    cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'],
+      ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF']],
     bool: ['ativo'],
   },
   Funcoes: {
@@ -111,7 +112,12 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     if (!sheet) return doc.addSheet({ title: titulo, headerValues: colunas });
     try { await sheet.loadHeaderRow(); } catch { await sheet.setHeaderRow(colunas); return sheet; }
     const faltando = colunas.filter(c => !sheet.headerValues.includes(c));
-    if (faltando.length) await sheet.setHeaderRow([...sheet.headerValues, ...faltando]);
+    if (faltando.length) {
+      // Coluna nova numa aba que já existe: entra no fim (aumenta a aba antes, se faltar espaço)
+      const total = sheet.headerValues.length + faltando.length;
+      if (total > sheet.columnCount) await sheet.resize({ rowCount: sheet.rowCount, columnCount: total });
+      await sheet.setHeaderRow([...sheet.headerValues, ...faltando]);
+    }
     return sheet;
   }
   async function linhas(t) {
