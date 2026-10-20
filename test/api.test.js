@@ -113,6 +113,19 @@ test('cadastro de colaborador: usuário repetido é recusado', async () => {
   assert.equal(r.status, 400);
 });
 
+test('colaborador: telefone, cidade e UF (opcionais) são guardados; UF fora da lista é recusada', async () => {
+  const a = await adminLogado();
+  const usuario = 'contato' + Date.now().toString(36);
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Com Contato', usuario, funcao: 'Vendedor', telefone: ' (47) 99725-0379 ', cidade: 'Porto Alegre', uf: 'rs' });
+  assert.equal(r.status, 201, JSON.stringify(r.dados));
+  assert.deepEqual([r.dados.telefone, r.dados.cidade, r.dados.uf], ['(47) 99725-0379', 'Porto Alegre', 'RS']);
+  const lista = (await a.get('/api/admin/dados')).dados.colaboradores.find(c => c.id === r.dados.id);
+  assert.equal(lista.cidade, 'Porto Alegre');
+  assert.equal((await a.post('/api/admin/colaboradores', { nome: 'UF Errada', usuario: usuario + 'x', funcao: 'Vendedor', uf: 'XX' })).status, 400);
+  const sem = await a.post('/api/admin/colaboradores', { nome: 'Sem Contato', usuario: usuario + 'y', funcao: 'Vendedor' });
+  assert.deepEqual([sem.dados.telefone, sem.dados.cidade, sem.dados.uf], ['', '', '']);
+});
+
 test('despesa: validações', async () => {
   const a = await adminLogado();
   const { c } = await novoColaborador(a);
