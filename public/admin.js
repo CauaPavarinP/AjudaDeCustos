@@ -751,16 +751,17 @@ function telaColaboradores() {
     <div class="card filters"><span class="muted small">Funções cadastradas</span>
       <div class="chips">${D.funcoes.map(f => `<span class="badge ${corFuncao(f)}">${esc(f)}<button class="x" data-delf="${esc(f)}" title="Excluir função" aria-label="Excluir função ${esc(f)}">×</button></span>`).join('')}<button class="btn xs" id="k-funcao">+ Nova função</button></div></div>
     <div class="card table-card"><div class="table-wrap"><table>
-      <thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Contato</th><th>Status</th><th>Ações</th></tr></thead>
+      <thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Telefone</th><th>Cidade / UF</th><th>Status</th><th>Ações</th></tr></thead>
       <tbody>${D.colaboradores.map(c => `<tr class="${c.ativo ? '' : 'off'}">
         <td class="b">${esc(c.nome)}</td><td>${esc(c.usuario)}</td>
         <td><span class="badge ${corFuncao(c.funcao)}">${esc(c.funcao)}</span></td>
-        <td>${esc(c.telefone) || '<span class="muted">—</span>'}${c.cidade || c.uf ? `<br><span class="muted small">${esc([c.cidade, c.uf].filter(Boolean).join(' / '))}</span>` : ''}</td>
+        <td>${esc(c.telefone) || '<span class="muted">—</span>'}</td>
+        <td>${esc([c.cidade, c.uf].filter(Boolean).join(' / ')) || '<span class="muted">—</span>'}</td>
         <td><span class="badge ${c.ativo ? 'b-green' : 'b-gray'}">${c.ativo ? 'Ativo' : 'Inativo'}</span></td>
         <td><span class="chips">${c.ativo
           ? `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-pw="${esc(c.id)}">Nova senha</button><button class="btn xs" data-off="${esc(c.id)}">Desativar</button>`
           : `<button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
-        || '<tr class="empty-row"><td colspan="6">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
+        || '<tr class="empty-row"><td colspan="7">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
     </table></div></div>`;
 
   $('k-novo').onclick = () => modalColab();
