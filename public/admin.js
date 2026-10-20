@@ -688,7 +688,7 @@ function telaFuncao() {
 
 // ======================= 05 · COLABORADORES =======================
 // PDF "Prestação de contas" (mesmo modelo da folha em papel): uma página por mês com gasto no ano,
-// com o quadro por categoria, o total e, embaixo, o detalhamento do que formou cada valor.
+// com o quadro por categoria e o total.
 function pdfPrestacao(colab, ano, rows) {
   const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, rs, s: somar(rs) })).filter(m => m.s.total > 0);
   if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${ano}.`, 'Nada para exportar');
@@ -701,7 +701,7 @@ function pdfPrestacao(colab, ano, rows) {
     doc.texto(180, y, doc.caber(valor, x2 - 185, 12), { tam: 12 });
     doc.linha(178, y + 5, x2, y + 5, { larg: 0.6 });
   };
-  for (const { i, rs, s } of meses) {
+  for (const { i, s } of meses) {
     doc.pagina();
     doc.texto(E, 80, 'PRESTAÇÃO DE CONTAS', { tam: 20, negrito: true });
     campo('PERÍODO', 125, `${MESES[i].toUpperCase()} / ${ano}`, 360);
@@ -730,34 +730,6 @@ function pdfPrestacao(colab, ano, rows) {
     }
     doc.texto(xV + 12, y + 20, 'R$', { tam: 12, negrito: true });
     doc.texto(DIR - 8, y + 20, fmt(s.total), { tam: 12, negrito: true, alinhar: 'dir' });
-
-    // Detalhamento: cada despesa do celular e cada categoria das prestações do painel
-    const itens = [];
-    for (const r of rs) {
-      if (r.origem === 'app') r.despesas.forEach(d => itens.push([d.data, dmy(d.data), d.categoria, d.observacao || 'Despesa do celular', d.valor]));
-      else CAT.filter(c => r.valores[c.chave]).forEach(c => itens.push([r.dataInicial, `${dm(r.dataInicial)} a ${dmy(r.dataFinal)}`, c.nome, r.observacao || 'Prestação lançada no painel', r.valores[c.chave]]));
-    }
-    itens.sort((a, b) => a[0].localeCompare(b[0]));
-    const cab = yy => {
-      doc.texto(E, yy, 'DETALHAMENTO', { tam: 10, negrito: true });
-      [['Data', E], ['Categoria', E + 120], ['Observação', E + 210]].forEach(([t, x]) => doc.texto(x, yy + 16, t, { tam: 9, negrito: true, cor: cinza }));
-      doc.texto(DIR, yy + 16, 'Valor', { tam: 9, negrito: true, alinhar: 'dir', cor: cinza });
-      doc.linha(E, yy + 21, DIR, yy + 21, { larg: 0.5, cor: cinza });
-      return yy + 34;
-    };
-    y = cab(y + 55);
-    for (const [, data, cat, obs, valor] of itens) {
-      if (y > doc.alt - 50) { // não coube: continua na próxima folha
-        rodape(); doc.pagina();
-        doc.texto(E, 60, `PRESTAÇÃO DE CONTAS · ${colab.nome} · ${MESES[i]} / ${ano} (continuação)`, { tam: 10, negrito: true });
-        y = cab(85);
-      }
-      doc.texto(E, y, data, { tam: 9 });
-      doc.texto(E + 120, y, cat, { tam: 9 });
-      doc.texto(E + 210, y, doc.caber(obs, DIR - E - 210 - 70, 9), { tam: 9 });
-      doc.texto(DIR, y, fmt(valor), { tam: 9, alinhar: 'dir' });
-      y += 14;
-    }
     rodape();
   }
   doc.baixar(`prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}`);
