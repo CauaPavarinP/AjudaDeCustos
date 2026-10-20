@@ -816,7 +816,6 @@ function modalColab(c) {
       <div class="field"><label>Cidade <span class="muted small">(opcional)</span></label><input class="input" id="m-cid" maxlength="60" value="${c ? esc(c.cidade) : ''}" placeholder="ex.: Porto Alegre"></div>
       <div class="field"><label>UF</label><select class="input" id="m-uf">${opt('', '—', '')}${UFS.map(u => opt(u, u, c ? c.uf : '')).join('')}</select></div>
     </div>
-    <span class="muted small">Telefone, cidade e UF saem preenchidos no PDF "Prestação de contas".</span>
     ${c ? '' : '<span class="muted small">A senha inicial é gerada automaticamente e aparece depois de salvar.</span>'}
     <div id="m-erro" class="alert hidden"></div>
     <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Salvar</button></div>`);
