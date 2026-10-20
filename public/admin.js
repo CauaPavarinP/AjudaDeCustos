@@ -19,7 +19,7 @@ let D = null;          // dados vindos do servidor
 let CAT = [];          // categorias
 const F = {            // filtros de cada tela (ficam guardados ao trocar de tela)
   l: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '', colab: '', busca: '' },
-  c: { colab: '', ano: hoje().slice(0, 4) },
+  c: { colab: '', ano: hoje().slice(0, 4), mes: '' }, // mes '' = o ano inteiro
   f: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '' },
   d: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), colab: '', busca: '', status: '' },
 };
@@ -597,7 +597,11 @@ function telaColaborador() {
   }
   const rows = todas.filter(r => r.colaboradorId === f.colab && r.mesRef.startsWith(f.ano));
   const porMes = MESES.map((_, i) => somar(rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)));
-  const s = somar(rows);
+  // Filtro de mês: a tabela, o total e o PDF ficam só com o mês escolhido; o gráfico continua com o ano
+  const mesN = Number(f.mes) || 0;
+  const rowsMes = mesN ? rows.filter(r => Number(r.mesRef.slice(5)) === mesN) : rows;
+  const nomePeriodo = mesN ? `${MESES[mesN - 1]}/${f.ano}` : f.ano;
+  const s = somar(rows), sMes = somar(rowsMes);
   const comGasto = porMes.filter(m => m.total > 0);
   const maxI = porMes.reduce((best, m, i) => (m.total > porMes[best].total ? i : best), 0);
   const max = Math.max(...porMes.map(m => m.total), 1);
@@ -606,22 +610,23 @@ function telaColaborador() {
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Resumo por colaborador</h1><p>Gastos do ano por mês e categoria (igual à planilha "Resumo prestação de contas")</p></div>
       <div class="acts"><button class="btn secondary" id="c-exp">Exportar PDF</button></div></div>
-    <div class="kpis" style="grid-template-columns:1.6fr 1fr 1fr 1fr">
-      <div class="card filters" style="grid-template-columns:1fr 100px;padding:12px 14px">
+    <div class="kpis" style="grid-template-columns:2.2fr 1fr 1fr 1fr">
+      <div class="card filters" style="grid-template-columns:1fr 100px 130px;padding:12px 14px">
         <div class="field"><label>Colaborador</label><select class="input" id="c-colab">${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('') || opt('', 'Nenhum cadastrado', '')}</select></div>
         <div class="field"><label>Ano</label><select class="input" id="c-ano">${optsAno(f.ano)}</select></div>
+        <div class="field"><label>Mês</label><select class="input" id="c-mes">${optsMes(f.mes)}</select></div>
       </div>
-      <div class="card kpi"><span class="l">Total no ano</span><span class="v">${brl(s.total)}</span></div>
+      <div class="card kpi"><span class="l">${mesN ? `Total em ${MESES[mesN - 1]}` : 'Total no ano'}</span><span class="v">${brl(sMes.total)}</span></div>
       <div class="card kpi"><span class="l">Média nos meses com gasto</span><span class="v">${brl(comGasto.length ? s.total / comGasto.length : 0)}</span></div>
       <div class="card kpi"><span class="l">Mês com maior gasto</span><span class="v sm">${s.total ? `${MESES[maxI]} · ${brl(porMes[maxI].total)}` : '—'}</span></div>
     </div>
     <div class="card chart-card"><h3>Gastos por mês</h3>
-      <div class="bars">${porMes.map((m, i) => `<div class="col">${m.total ? `<span class="val">${fmt(m.total)}</span>` : ''}<div class="bar${m.total ? '' : ' zero'}" style="height:${m.total ? Math.max(3, m.total / max * 120) : 2}px"></div><span class="lab">${MES_CURTO[i]}</span></div>`).join('')}</div>
+      <div class="bars${mesN ? ' filtrado' : ''}">${porMes.map((m, i) => `<div class="col${i + 1 === mesN ? ' sel' : ''}">${m.total ? `<span class="val">${fmt(m.total)}</span>` : ''}<div class="bar${m.total ? '' : ' zero'}" style="height:${m.total ? Math.max(3, m.total / max * 120) : 2}px"></div><span class="lab">${MES_CURTO[i]}</span></div>`).join('')}</div>
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Mês</th>${CAT.map(c => `<th class="num">${esc(c.nome)}</th>`).join('')}<th class="num">Total</th></tr></thead>
-      <tbody>${porMes.map((m, i) => `<tr><td class="b">${MESES[i]}</td>${CAT.map(c => celClick(m.v[c.chave], `data-m="${i + 1}" data-c="${c.chave}"`)).join('')}${celClick(m.total, `data-m="${i + 1}" data-c="total"`, ' b')}</tr>`).join('')}
-        <tr class="total"><td>Total ${esc(f.ano)}</td>${CAT.map(c => celClick(s.v[c.chave], `data-m="ano" data-c="${c.chave}"`)).join('')}${celClick(s.total, 'data-m="ano" data-c="total"')}</tr></tbody>
+      <tbody>${porMes.map((m, i) => (mesN && i + 1 !== mesN ? '' : `<tr><td class="b">${MESES[i]}</td>${CAT.map(c => celClick(m.v[c.chave], `data-m="${i + 1}" data-c="${c.chave}"`)).join('')}${celClick(m.total, `data-m="${i + 1}" data-c="total"`, ' b')}</tr>`)).join('')}
+        <tr class="total"><td>Total ${esc(nomePeriodo)}</td>${CAT.map(c => celClick(sMes.v[c.chave], `data-m="${mesN || 'ano'}" data-c="${c.chave}"`)).join('')}${celClick(sMes.total, `data-m="${mesN || 'ano'}" data-c="total"`)}</tr></tbody>
     </table></div></div>`;
 
   // Clique num valor da tabela: abre as despesas e prestações que formam aquele número
@@ -629,7 +634,8 @@ function telaColaborador() {
   ligarCelulas(doMes, () => (colab ? colab.nome : ''), td => (td.dataset.m === 'ano' ? `Ano ${f.ano}` : `${MESES[Number(td.dataset.m) - 1]}/${f.ano}`));
   $('c-colab').addEventListener('change', e => { f.colab = e.target.value; telaColaborador(); });
   $('c-ano').addEventListener('change', e => { f.ano = e.target.value; telaColaborador(); });
-  $('c-exp').addEventListener('click', () => (colab ? pdfPrestacao(colab, f.ano, rows) : avisar('Cadastre um colaborador primeiro.', 'Nada para exportar')));
+  $('c-mes').addEventListener('change', e => { f.mes = e.target.value; telaColaborador(); });
+  $('c-exp').addEventListener('click', () => (colab ? pdfPrestacao(colab, f.ano, rowsMes, f.mes) : avisar('Cadastre um colaborador primeiro.', 'Nada para exportar')));
 }
 
 // ======================= 04 · RESUMO POR FUNÇÃO =======================
@@ -689,9 +695,10 @@ function telaFuncao() {
 // ======================= 05 · COLABORADORES =======================
 // PDF "Prestação de contas" (mesmo modelo da folha em papel): uma página por mês com gasto no ano,
 // com o quadro por categoria e o total.
-function pdfPrestacao(colab, ano, rows) {
-  const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, rs, s: somar(rs) })).filter(m => m.s.total > 0);
-  if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${ano}.`, 'Nada para exportar');
+// mes ('01'..'12' ou ''): só entra no nome do arquivo e no aviso; as linhas já vêm filtradas
+function pdfPrestacao(colab, ano, rows, mes = '') {
+  const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, s: somar(rs) })).filter(m => m.s.total > 0);
+  if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${mes ? MESES[Number(mes) - 1].toLowerCase() + '/' : ''}${ano}.`, 'Nada para exportar');
   const doc = novoPdf(), E = 60, DIR = doc.larg - 60, cinza = [0.45, 0.45, 0.45];
   const gerado = `Gerado em ${dmy(hoje())} pelo sistema Ajuda de Custo`;
   const rodape = () => doc.texto(doc.larg / 2, doc.alt - 30, gerado, { tam: 8, alinhar: 'centro', cor: cinza });
@@ -732,7 +739,7 @@ function pdfPrestacao(colab, ano, rows) {
     doc.texto(DIR - 8, y + 20, fmt(s.total), { tam: 12, negrito: true, alinhar: 'dir' });
     rodape();
   }
-  doc.baixar(`prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}`);
+  doc.baixar(`prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}${mes ? '-' + mes : ''}`);
 }
 
 function telaColaboradores() {
