@@ -18,7 +18,8 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 - **Mês de referência:** por padrão, o mês da data inicial (regra final ainda a definir com o Maurício).
 - **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
 - **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login no mesmo aparelho, ou de 20 tentativas erradas na mesma conta vindas de qualquer lugar. Trocar o `SESSION_SECRET` desconecta todo mundo.
-- **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico. No painel, "Baixar backup" (ao lado do botão Sair) gera um `.xlsx` com todas as abas (sem as senhas).
+- **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico.
+- **PDF:** no "Resumo por colaborador", o botão "Exportar PDF" gera a folha "Prestação de contas" (mesmo modelo da folha em papel) do colaborador e ano escolhidos: uma página por mês com gasto, com o quadro por categoria e o total. Telefone, cidade e UF saem em branco para preencher à mão. No painel, "Baixar backup" (ao lado do botão Sair) gera um `.xlsx` com todas as abas (sem as senhas).
 - **Foto da nota (opcional):** no celular, "Tirar foto" (câmera) ou "Galeria". A foto é reduzida no próprio celular antes de enviar. Enquanto a despesa está em análise, o colaborador pode adicionar ou trocar a foto no detalhe. No painel, "📷 Ver nota" abre a foto (clique para ampliar) ao lado dos dados, com Aprovar e Recusar. As fotos ficam no Cloudinary em modo privado: só abrem pelo sistema, para quem está logado.
 - **Comprovantes da prestação:** na Nova prestação (ou ao editar), "📎 Anexar fotos das notas" aceita até 10 fotos (JPG/PNG, da pasta do computador). As fotos novas são enviadas ao salvar; dá para ver em tamanho grande, navegar entre elas e remover. Nos Lançamentos, 📎N mostra quantas fotos a prestação tem.
 
@@ -127,6 +128,7 @@ public/app.js
 public/admin.html   painel do Maurício
 public/admin.js
 public/xlsx.js      gera os arquivos Excel (.xlsx) no navegador
+public/pdf.js       gera o PDF "Prestação de contas" no navegador
 public/dialogo.js   janelas de aviso e confirmação
 public/foto.js      reduz a foto no navegador antes de enviar (celular e painel)
 public/manifest.webmanifest + public/icons/   app na tela inicial do celular

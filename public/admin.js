@@ -605,7 +605,7 @@ function telaColaborador() {
 
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Resumo por colaborador</h1><p>Gastos do ano por mês e categoria (igual à planilha "Resumo prestação de contas")</p></div>
-      <div class="acts"><button class="btn secondary" id="c-exp">Exportar Excel</button></div></div>
+      <div class="acts"><button class="btn secondary" id="c-exp">Exportar PDF</button></div></div>
     <div class="kpis" style="grid-template-columns:1.6fr 1fr 1fr 1fr">
       <div class="card filters" style="grid-template-columns:1fr 100px;padding:12px 14px">
         <div class="field"><label>Colaborador</label><select class="input" id="c-colab">${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('') || opt('', 'Nenhum cadastrado', '')}</select></div>
@@ -629,9 +629,7 @@ function telaColaborador() {
   ligarCelulas(doMes, () => (colab ? colab.nome : ''), td => (td.dataset.m === 'ano' ? `Ano ${f.ano}` : `${MESES[Number(td.dataset.m) - 1]}/${f.ano}`));
   $('c-colab').addEventListener('change', e => { f.colab = e.target.value; telaColaborador(); });
   $('c-ano').addEventListener('change', e => { f.ano = e.target.value; telaColaborador(); });
-  $('c-exp').addEventListener('click', () => exportar(`resumo-${semAcento(colab ? colab.nome : 'colaborador').replace(/\W+/g, '-')}-${f.ano}`, colab ? colab.nome : 'Resumo',
-    [col('Mês', 14), ...colsCat()],
-    [...porMes.map((m, i) => [MESES[i], ...CAT.map(c => n2(m.v[c.chave])), n2(m.total)]), ['Total ' + f.ano, ...CAT.map(c => n2(s.v[c.chave])), n2(s.total)]]));
+  $('c-exp').addEventListener('click', () => (colab ? pdfPrestacao(colab, f.ano, rows) : avisar('Cadastre um colaborador primeiro.', 'Nada para exportar')));
 }
 
 // ======================= 04 · RESUMO POR FUNÇÃO =======================
@@ -689,6 +687,54 @@ function telaFuncao() {
 }
 
 // ======================= 05 · COLABORADORES =======================
+// PDF "Prestação de contas" (mesmo modelo da folha em papel): uma página por mês com gasto no ano,
+// com o quadro por categoria e o total.
+function pdfPrestacao(colab, ano, rows) {
+  const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, rs, s: somar(rs) })).filter(m => m.s.total > 0);
+  if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${ano}.`, 'Nada para exportar');
+  const doc = novoPdf(), E = 60, DIR = doc.larg - 60, cinza = [0.45, 0.45, 0.45];
+  const gerado = `Gerado em ${dmy(hoje())} pelo sistema Ajuda de Custo`;
+  const rodape = () => doc.texto(doc.larg / 2, doc.alt - 30, gerado, { tam: 8, alinhar: 'centro', cor: cinza });
+  // Rótulo à direita e o valor sobre uma linha (como os campos da folha)
+  const campo = (rot, y, valor, x2 = DIR) => {
+    doc.texto(170, y, rot + ' :', { tam: 13, negrito: true, alinhar: 'dir' });
+    doc.texto(180, y, doc.caber(valor, x2 - 185, 12), { tam: 12 });
+    doc.linha(178, y + 5, x2, y + 5, { larg: 0.6 });
+  };
+  for (const { i, s } of meses) {
+    doc.pagina();
+    doc.texto(E, 80, 'PRESTAÇÃO DE CONTAS', { tam: 20, negrito: true });
+    campo('PERÍODO', 125, `${MESES[i].toUpperCase()} / ${ano}`, 360);
+    campo('NOME', 152, colab.nome);
+    campo('TELEFONE', 179, '');
+    campo('CIDADE', 206, '', 390);
+    doc.texto(445, 206, 'UF :', { tam: 13, negrito: true, alinhar: 'dir' });
+    doc.linha(450, 211, DIR, 211, { larg: 0.6 });
+
+    // Quadro Descrição | Valor
+    const xV = 365, alt = 24;
+    let y = 240;
+    doc.ret(E, y, DIR - E, alt + 2, { fundo: [0.78, 0.78, 0.78] });
+    doc.texto((E + xV) / 2, y + 18, 'DESCRIÇÃO', { tam: 12, negrito: true, alinhar: 'centro' });
+    doc.texto((xV + DIR) / 2, y + 18, 'VALOR', { tam: 12, negrito: true, alinhar: 'centro' });
+    doc.linha(xV, y, xV, y + alt + 2);
+    y += alt + 2;
+    for (const c of [...CAT, null, null]) { // duas linhas em branco no fim, como na folha
+      doc.ret(E, y, DIR - E, alt);
+      doc.linha(xV, y, xV, y + alt);
+      if (c) {
+        doc.texto((E + xV) / 2, y + 16, c.nome.toUpperCase(), { tam: 12, alinhar: 'centro' });
+        if (s.v[c.chave]) doc.texto((xV + DIR) / 2, y + 16, fmt(s.v[c.chave]), { tam: 12, alinhar: 'centro' });
+      }
+      y += alt;
+    }
+    doc.texto(xV + 12, y + 20, 'R$', { tam: 12, negrito: true });
+    doc.texto(DIR - 8, y + 20, fmt(s.total), { tam: 12, negrito: true, alinhar: 'dir' });
+    rodape();
+  }
+  doc.baixar(`prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}`);
+}
+
 function telaColaboradores() {
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Colaboradores</h1><p>Cadastro de quem presta contas — evita nomes digitados de jeitos diferentes</p></div>
