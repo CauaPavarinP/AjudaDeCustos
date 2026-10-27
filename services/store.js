@@ -97,9 +97,11 @@ function criarStoreMemoria() {
       Object.assign(o, copia(campos));
       return copia(o);
     },
-    async remove(t, id) {
+    // se(atual) opcional: só apaga se a condição for verdadeira (senão devolve 'conflito')
+    async remove(t, id, se) {
       const i = dados[t].findIndex(x => x.id === id);
       if (i < 0) return false;
+      if (se && !se(copia(dados[t][i]))) return 'conflito';
       dados[t].splice(i, 1);
       return true;
     },
@@ -181,9 +183,10 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       limpar(t);
       return atual;
     }),
-    remove: (t, id) => naFila(t, async () => {
+    remove: (t, id, se) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return false;
+      if (se && !se(deLinha(t, row.toObject()))) return 'conflito';
       await row.delete();
       limpar(t);
       return true;

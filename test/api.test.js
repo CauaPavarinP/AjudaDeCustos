@@ -219,6 +219,17 @@ test('períodos: despesas aprovadas antes do controle não entram sozinhas; o Ma
   } finally { srv.kill(); }
 });
 
+test('períodos: período sem nenhuma despesa aprovada não pode ser pago', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
+  const per = (await c.post('/api/periodos/fechar')).dados.periodo;
+  await a.post(`/api/admin/despesas/${d.id}/recusar`);
+  const r = await a.post(`/api/admin/periodos/${per.id}/pagar`);
+  assert.equal(r.status, 400, JSON.stringify(r.dados));
+  assert.equal((await a.get('/api/admin/dados')).dados.periodos.find(x => x.id === per.id).status, 'Enviado'); // volta ao normal
+});
+
 test('despesa: validações', async () => {
   const a = await adminLogado();
   const { c } = await novoColaborador(a);

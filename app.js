@@ -274,9 +274,15 @@ async function fecharPeriodo(colab, quem, { antigas = false, jaPagas = false } =
   await store.add('Periodos', p);
   const datas = [];
   let soma = 0;
-  for (const d of candidatas) { // condição: se outra tela já colocou a despesa num período, não mexe
-    const ok = await store.update('Despesas', d.id, { periodoId: p.id }, a => !a.periodoId);
-    if (ok) { datas.push(d.data); if (ok.status === STATUS.aprovada) soma += ok.valor; }
+  try {
+    for (const d of candidatas) { // condição: se outra tela já colocou a despesa num período, não mexe
+      const ok = await store.update('Despesas', d.id, { periodoId: p.id }, a => !a.periodoId && a.status !== STATUS.recusada);
+      if (ok) { datas.push(d.data); if (ok.status === STATUS.aprovada) soma += ok.valor; }
+    }
+  } catch (e) { // falha no meio (ex.: cota do Google): o período fica com as notas que entraram, com as datas certas
+    if (datas.length) { datas.sort(); await store.update('Periodos', p.id, { dataInicial: datas[0], dataFinal: datas[datas.length - 1] }).catch(() => {}); }
+    else await store.remove('Periodos', p.id).catch(() => {});
+    throw e;
   }
   if (!datas.length) { await store.remove('Periodos', p.id); return { erro: 'Essas despesas acabaram de ser enviadas em outra tela.', status: 409 }; }
   datas.sort();
@@ -331,8 +337,14 @@ app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
   if (d.periodoId) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser alterada.');
   const f = await guardarFoto(d.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
-  const atual = await store.update('Despesas', d.id, { foto: f.ref });
-  apagarFoto(d.foto);
+  // Condição: só troca se continua em análise e fora de período (pode ter sido aprovada/enviada durante o envio da foto)
+  const atual = await store.update('Despesas', d.id, { foto: f.ref }, a => a.status === STATUS.analise && !a.periodoId);
+  if (!atual) {
+    apagarFoto(f.ref); // a foto nova não ficou ligada a nada: apaga do Cloudinary
+    return atual === null ? erro(res, 'Despesa não encontrada.', 404)
+      : erro(res, 'Esta despesa acabou de ser aprovada ou enviada num período e não pode mais ser alterada.', 409);
+  }
+  apagarFoto(d.foto); // a foto antiga
   res.json(publicoDesp(atual));
 }));
 
@@ -341,7 +353,8 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
   if (d.periodoId) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser excluída.');
-  await store.remove('Despesas', d.id);
+  const r = await store.remove('Despesas', d.id, a => a.status === STATUS.analise && !a.periodoId); // confere de novo na hora de apagar
+  if (r === 'conflito') return erro(res, 'Esta despesa acabou de ser aprovada ou enviada num período e não pode mais ser excluída.', 409);
   apagarFoto(d.foto);
   res.json({ ok: true });
 }));
@@ -517,9 +530,15 @@ app.post('/api/admin/prestacoes/:id/fotos', exigeAdmin, wrap(async (req, res) =>
   const f = await guardarFoto('prest-' + p.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
   // lê de novo logo antes de gravar, para não perder uma foto enviada ao mesmo tempo
-  const agora = await acharPrest(p.id);
+  const agora = (await store.list('Prestacoes', { fresco: true })).find(x => x.id === p.id);
   if (!agora) { apagarFoto(f.ref); return erro(res, 'Prestação não encontrada.', 404); }
-  const atual = await store.update('Prestacoes', p.id, { fotos: [...refsPrest(agora), f.ref].join('|') });
+  if (refsPrest(agora).length >= MAX_FOTOS_PREST) { apagarFoto(f.ref); return erro(res, `Cada prestação aceita até ${MAX_FOTOS_PREST} fotos.`); }
+  // Condição: só grava se ninguém mexeu nas fotos durante o envio (senão uma das duas fotos se perderia)
+  const atual = await store.update('Prestacoes', p.id, { fotos: [...refsPrest(agora), f.ref].join('|') }, a => String(a.fotos || '') === String(agora.fotos || ''));
+  if (!atual) {
+    apagarFoto(f.ref);
+    return atual === null ? erro(res, 'Prestação não encontrada.', 404) : erro(res, 'As fotos desta prestação mudaram durante o envio. Envie esta foto de novo.', 409);
+  }
   res.status(201).json(publicoPrest(atual));
 }));
 app.get('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
@@ -615,6 +634,10 @@ app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
     return erro(res, `Ainda há ${analise} despesa${analise > 1 ? 's' : ''} em análise neste período. Aprove ou recuse antes de pagar.`);
   }
   const valorPago = r2(notas.filter(x => x.status === STATUS.aprovada).reduce((t, x) => t + x.valor, 0));
+  if (!(valorPago > 0)) {
+    await store.update('Periodos', id, { status: PERIODO.enviado }, a => a.status === PERIODO.pagando);
+    return erro(res, 'Este período não tem nenhuma despesa aprovada: não há o que pagar. Use "Reabrir" para desfazer o período.');
+  }
   const pago = await store.update('Periodos', id, { status: PERIODO.pago, pagoEm: new Date().toISOString(), pagoPor: ADMIN_NOME, valorPago },
     a => a.status === PERIODO.pagando);
   if (!pago) return erro(res, 'O pagamento foi interrompido em outra tela. A lista foi atualizada; confira o período.', 409);

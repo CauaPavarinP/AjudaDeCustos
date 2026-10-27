@@ -17,7 +17,9 @@ const badge = st => `<span class="badge ${st === 'Paga' ? 'b-blue' : st === 'Apr
 // Período de pagamento em que a despesa foi enviada (vem do servidor em d.periodo)
 const paga = d => d.status === 'Aprovada' && d.periodo && d.periodo.status === 'Pago';
 const statusVisto = d => (paga(d) ? 'Paga' : d.status);
-const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }).slice(0, 5);
+const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+// "18/10 a 27/10" (com o ano nas duas pontas quando o intervalo vira o ano: "28/12/2026 a 05/01/2027")
+const faixa = (a, b) => (a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dm(b)}` : `${dmy(a)} a ${dmy(b)}`);
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
@@ -63,8 +65,12 @@ function notaVersao(r) {
   if (!versaoAberta) versaoAberta = v; else if (v !== versaoAberta) versaoNova = true;
 }
 
+const MSG_REDE = 'Sem conexão com a internet. Confira o sinal e tente de novo.';
 async function api(url, opts = {}) {
-  const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
+  let r;
+  // sem isso, sem internet o navegador mostraria só "Failed to fetch", em inglês
+  try { r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts }); }
+  catch { throw Object.assign(new Error(MSG_REDE), { rede: true }); }
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
   if (r.status === 401 && !url.endsWith('/api/login')) {
@@ -118,14 +124,20 @@ function telaLogin() {
 // ---------- C2 · Minhas despesas ----------
 // "recebidas" vem preenchida só pela atualização automática (os botões chamam sem argumento)
 async function telaInicio(recebidas) {
-  despesas = Array.isArray(recebidas) ? recebidas : await api('/api/despesas');
+  let semConexao = false;
+  if (Array.isArray(recebidas)) despesas = recebidas;
+  else {
+    try { despesas = await api('/api/despesas'); }
+    catch (e) { if (!e.rede) throw e; semConexao = true; } // sem internet: mostra a última lista carregada
+  }
   if (!me) return; // saiu (botão Sair) enquanto a lista carregava
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   if (mesSel !== 'todas' && !meses.includes(mesSel)) mesSel = hoje().slice(0, 7); // título e seletor sempre no mesmo mês
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
   const total = lista.filter(d => d.status !== 'Recusada').reduce((s, d) => s + d.valor, 0); // recusadas não contam
-  const aprov = lista.filter(d => d.status === 'Aprovada').length, anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
+  const pagas = lista.filter(paga).length, aprov = lista.filter(d => d.status === 'Aprovada').length - pagas;
+  const anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
   const nomeMes = ym => MESES[Number(ym.slice(5)) - 1] + '/' + ym.slice(0, 4);
   mostrar(`
     <div class="m-head">
@@ -135,15 +147,17 @@ async function telaInicio(recebidas) {
     <div class="hero">
       <span class="l">${mesSel === 'todas' ? 'Total geral' : 'Total no mês'}${rec ? ' (sem as recusadas)' : ''}</span>
       <span class="v">${brl(total)}</span>
-      <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
+      <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${pagas ? ` · ${pagas} paga${pagas === 1 ? '' : 's'}` : ''}${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
     </div>
+    ${semConexao ? `<div class="alert">${MSG_REDE} Mostrando a última lista carregada.</div>` : ''}
     ${cardPeriodo()}
     <div class="sec-title"><span>Minhas despesas</span>${mesSel !== 'todas' ? '<button class="link" id="i-todas">Ver todas</button>' : ''}</div>
     <div class="list" id="i-lista">
       ${lista.map(d => `<button class="item" data-id="${esc(d.id)}">${icone(d.categoria)}
-        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${d.observacao ? esc(d.observacao) + ' · ' : ''}${dm(d.data)}</div></div>
+        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${dm(d.data)}${d.observacao ? ' · ' + esc(d.observacao) : ''}</div></div>
         <div class="r"><b>${brl(d.valor)}</b>${badge(statusVisto(d))}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
     </div>
+    <div class="fab-espaco"></div>
     <button class="fab" id="i-fab" aria-label="Nova despesa">+</button>`, 'inicio');
   $('i-mes').onchange = e => { mesSel = e.target.value; telaInicio(); };
   if ($('i-todas')) $('i-todas').onclick = () => { mesSel = 'todas'; telaInicio(); };
@@ -186,6 +200,12 @@ function telaNova() {
       e.preventDefault();
       const d = String(e.data || '').replace(/\D/g, '');
       if (d) mudaValor(Number(((tudo ? '' : String(centavos)) + d).slice(-9)));
+    } else if (e.inputType === 'insertFromPaste' || e.inputType === 'insertReplacementText') {
+      // Valor colado (ex.: "R$ 1.234,56" ou "50"): substitui o que estava no campo, em vez de juntar os dígitos
+      e.preventDefault();
+      const t = String(e.data || (e.dataTransfer && e.dataTransfer.getData('text')) || '').replace(/[^\d.,]/g, '');
+      const m = /^(.*?)(?:[.,](\d{1,2}))?$/.exec(t);
+      mudaValor(Math.min(999999999, Number(m[1].replace(/\D/g, '') || '0') * 100 + Number((m[2] || '0').padEnd(2, '0'))));
     } else if (e.inputType.startsWith('delete')) {
       e.preventDefault();
       mudaValor(tudo ? 0 : Math.floor(centavos / 10));
@@ -226,29 +246,40 @@ function telaEnviada() {
 // ---------- C5 · Detalhe da despesa ----------
 // Card "não enviadas": despesas que ainda não estão em nenhum período (as recusadas não contam).
 // O colaborador fecha o período quando quiser (ex.: de 18 a 27) e as despesas vão juntas para pagamento.
+// Vale para todos os meses (não segue o seletor de mês), por isso o card diz "todos os meses".
 function cardPeriodo() {
   const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
-  const aguardando = despesas.filter(d => d.status === 'Aprovada' && d.periodo && !['Pago', 'Anterior'].includes(d.periodo.status)).reduce((s, d) => s + d.valor, 0);
-  if (!pend.length && !aguardando) return '';
+  const enviadas = despesas.filter(d => d.periodo && !['Pago', 'Anterior'].includes(d.periodo.status) && d.status !== 'Recusada');
+  if (!pend.length && !enviadas.length) return '';
   const datas = pend.map(d => d.data).sort();
+  const aprovEnv = enviadas.filter(d => d.status === 'Aprovada'), analEnv = enviadas.length - aprovEnv.length;
   return `<div class="card periodo-card">
-    ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento</div>
-      <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${dm(datas[0])} a ${dm(datas[datas.length - 1])}</div>
+    ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento <span class="s">(todos os meses)</span></div>
+      <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${faixa(datas[0], datas[datas.length - 1])}</div>
       <button class="btn block" id="i-fechar">Fechar período e enviar</button>` : ''}
-    ${aguardando ? `<div class="s">Aguardando pagamento: <b>${brl(aguardando)}</b> (aprovadas nos períodos enviados)</div>` : ''}
+    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `<b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b> aprovado${aprovEnv.length === 1 ? '' : 's'}` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
   </div>`;
 }
+let fechando = false; // trava contra toque duplo
 async function fecharPeriodo() {
-  const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
-  const datas = pend.map(d => d.data).sort();
-  const ok = await confirmar(`As ${pend.length} despesa${pend.length === 1 ? '' : 's'} de ${dm(datas[0])} a ${dm(datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) vão para o Maurício como um período de pagamento.\n\nDepois disso elas não podem mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
-    { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
-  if (!ok) return;
+  if (fechando) return;
+  fechando = true;
   try {
-    const r = await api('/api/periodos/fechar', { method: 'POST', body: '{}' });
-    await telaInicio();
-    avisar(`Período de ${dm(r.periodo.dataInicial)} a ${dm(r.periodo.dataFinal)} enviado com ${r.notas} despesa${r.notas === 1 ? '' : 's'}.`, 'Período enviado');
-  } catch (err) { avisar(err.message, 'Não foi possível enviar'); telaInicio(); }
+    // Busca a lista atualizada antes de confirmar (o Maurício pode ter recusado alguma nota há pouco)
+    try { despesas = await api('/api/despesas'); } catch (e) { return avisar(e.message, 'Não foi possível enviar'); }
+    const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
+    if (!pend.length) { await telaInicio(despesas); return avisar('Não há despesas novas para enviar.', 'Nada para enviar'); }
+    const datas = pend.map(d => d.data).sort();
+    const ok = await confirmar(`${pend.length === 1 ? 'A despesa' : `As ${pend.length} despesas`} de ${faixa(datas[0], datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) vão para o Maurício como um período de pagamento.\n\nDepois disso elas não podem mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
+      { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
+    if (!ok) return;
+    let r;
+    try { r = await api('/api/periodos/fechar', { method: 'POST', body: '{}' }); }
+    catch (err) { avisar(err.message, 'Não foi possível enviar'); return telaInicio().catch(() => {}); }
+    // Enviado: o aviso de sucesso aparece mesmo se a atualização da lista falhar logo depois
+    await telaInicio().catch(() => {});
+    avisar(`Período de ${faixa(r.periodo.dataInicial, r.periodo.dataFinal)} enviado com ${r.notas} despesa${r.notas === 1 ? '' : 's'}.`, 'Período enviado');
+  } finally { fechando = false; }
 }
 
 function telaDetalhe(d) {
@@ -260,8 +291,8 @@ function telaDetalhe(d) {
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   const linhaPer = !d.periodo ? (d.status !== 'Recusada' ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
     : d.periodo.status === 'Anterior' ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
-    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}</div>`
-    : `<div class="okline gray">Enviada no período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}${d.status === 'Aprovada' ? ' · aguardando pagamento' : ''}</div>`;
+    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
+    : `<div class="okline gray">Enviada no período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}${d.status === 'Aprovada' ? ' · aguardando pagamento' : ''}</div>`;
   const editavel = d.status === 'Em análise' && !d.periodo; // depois de enviada num período, fica travada
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
@@ -277,7 +308,7 @@ function telaDetalhe(d) {
       <div><span>Valor</span><span>${brl(d.valor)}</span></div>
       <div><span>Data da nota</span><span>${dmy(d.data)}</span></div>
       <div><span>Observação</span><span>${esc(d.observacao) || '—'}</span></div>
-      <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
+      <div><span>Lançada em</span><span>${quando(d.criadoEm)}</span></div>
       <div><span>Status</span><span>${badge(statusVisto(d))}</span></div>
     </div>
     <div id="d-erro-foto" class="alert hidden"></div>
@@ -293,12 +324,20 @@ function telaDetalhe(d) {
       const nova = await api('/api/despesas/' + encodeURIComponent(d.id) + '/foto', { method: 'PUT', body: JSON.stringify({ foto: f }) });
       despesas = despesas.map(x => (x.id === nova.id ? nova : x));
       telaDetalhe(nova);
-    } catch (err) { telaDetalhe(d); erro('d-erro-foto', err.message); }
+    } catch (err) { await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
   }, 'd-erro-foto');
   if ($('d-excluir')) $('d-excluir').onclick = async () => {
     if (!(await confirmar('Ela sai da sua lista e do painel do Maurício.', { titulo: 'Excluir esta despesa?', ok: 'Excluir', perigo: true }))) return;
-    try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); } catch (err) { erro('d-erro', err.message); }
+    try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); }
+    catch (err) { await redesenharDetalhe(d); if ($('d-erro-foto')) erro('d-erro-foto', err.message); }
   };
+}
+// Depois de um erro, busca a despesa de novo: se ela foi aprovada ou enviada num período em outro lugar,
+// a tela deixa de oferecer "Trocar foto" e "Excluir"
+async function redesenharDetalhe(d) {
+  try { despesas = await api('/api/despesas'); } catch { /* sem conexão: usa a que já tem */ }
+  const nova = despesas.find(x => x.id === d.id);
+  if (nova) telaDetalhe(nova); else await telaInicio(despesas);
 }
 
 // ---------- Perfil ----------
@@ -370,9 +409,15 @@ async function iniciar() {
   try { fotosLigadas = !!(await api('/api/config')).fotos; } catch { fotosLigadas = false; }
   await telaInicio();
 }
-iniciar().catch(err => {
-  // 401 já leva ao login; qualquer outro erro (servidor fora do ar, sem internet) mostra aviso em vez de tela em branco
-  if (me || err.login) return;
-  telaLogin();
-  erro('l-erro', 'Não foi possível conectar ao servidor. Tente de novo em instantes.');
-});
+function comecar() {
+  iniciar().catch(err => {
+    // 401 já leva ao login. Sem conexão (ou servidor fora do ar): tela própria com "Tentar de novo", e não o
+    // login, para a pessoa não achar que foi desconectada
+    if (me || err.login) return;
+    mostrar(`<div class="sem-rede"><span style="font-size:40px">📶</span><h2>Sem conexão</h2>
+      <p class="muted">${err.rede ? MSG_REDE : 'Não foi possível falar com o servidor agora. Tente de novo em instantes.'}</p>
+      <button class="btn lg block" id="r-tentar">Tentar de novo</button></div>`, '');
+    $('r-tentar').onclick = comecar;
+  });
+}
+comecar();

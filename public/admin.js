@@ -35,7 +35,9 @@ function notaVersao(r) {
 }
 
 async function api(url, opts = {}) {
-  const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
+  let r;
+  try { r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts }); }
+  catch { throw new Error('Sem conexão com a internet. Confira a rede e tente de novo.'); } // o navegador diria só "Failed to fetch"
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
   if (r.status === 401 && !url.endsWith('/login')) { mostrarLogin(); throw new Error('Faça login.'); }
@@ -59,6 +61,10 @@ async function avaliarDespesa(id, acao) {
 
 async function carregar() {
   D = await api('/api/admin/dados');
+  // Despesas, prestações e períodos guardam o nome da época; as telas mostram sempre o nome atual do cadastro
+  // (se o colaborador foi renomeado, tudo aparece com o nome novo e a busca encontra pelo nome novo)
+  const nomes = new Map(D.colaboradores.map(c => [c.id, c.nome]));
+  for (const x of [...D.despesas, ...D.prestacoes, ...(D.periodos || [])]) { x.nomeEpoca = x.colaborador; const n = nomes.get(x.colaboradorId); if (n) x.colaborador = n; }
   CAT = D.categorias;
   const pend = D.despesas.filter(d => d.status === 'Em análise').length;
   $('nav-pend').textContent = pend;
@@ -137,7 +143,7 @@ function telaLancamentos() {
     && (!f.mes || r.mesRef.slice(5) === f.mes)
     && (!f.funcao || r.funcao === f.funcao)
     && (!f.colab || r.colaboradorId === f.colab)
-    && (!busca || semAcento(r.colaborador + ' ' + r.observacao).includes(busca)))
+    && (!busca || semAcento(r.colaborador + ' ' + r.observacao + ' ' + (r.despesas || []).map(d => d.observacao + ' ' + d.categoria).join(' ')).includes(busca)))
     .sort((a, b) => (a.dataInicial + a.colaborador).localeCompare(b.dataInicial + b.colaborador));
   const s = somar(rows);
   const maior = CAT.map(c => ({ ...c, v: s.v[c.chave] })).sort((a, b) => b.v - a.v)[0];
@@ -264,6 +270,7 @@ function modalNota(d, voltar) {
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '—');
   const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto' + (d.fotoV ? '?v=' + d.fotoV : ''); // ?v muda quando a foto é trocada
   const emAnalise = d.status === 'Em análise';
+  const perPago = periodoTravado(d); // despesa de período pago: não pode mais mudar
   const m = abrirModal(`<h3>Analisar despesa · ${esc(d.colaborador)}</h3>
     <div class="nota-grid">
       <div class="nota-img" id="m-img">${d.foto ? `<img src="${url}" alt="Foto da nota" title="Clique para ampliar">` : '<span class="sem">Despesa enviada sem foto da nota.</span>'}</div>
@@ -281,6 +288,7 @@ function modalNota(d, voltar) {
         ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
         ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
+          : perPago ? '<span class="muted small">Período já pago: para mudar esta despesa, desfaça o pagamento em Pagamentos.</span>'
           : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === 'Aprovada' ? 'aprovação' : 'recusa'}</button>`}
         <button class="btn secondary" id="m-fechar">${voltar ? 'Voltar' : 'Fechar'}</button>
       </div>
@@ -303,11 +311,12 @@ function modalNota(d, voltar) {
     if (acao === 'recusar' && !(await confirmar('O colaborador verá o status "Recusada".', { titulo: 'Recusar esta despesa?', ok: 'Recusar', perigo: true }))) return;
     if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
     botao.disabled = true;
-    try { await avaliarDespesa(d.id, acao); fecharModal(); desenharTela(); }
+    // Aberta a partir de outra lista (ex.: "Ver notas" do período): volta para ela, sem fechar tudo
+    try { await avaliarDespesa(d.id, acao); desenharTela(); if (voltar) voltar(); else fecharModal(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
-  else m.querySelector('#m-desfazer').onclick = decidir('reabrir');
+  else if (m.querySelector('#m-desfazer')) m.querySelector('#m-desfazer').onclick = decidir('reabrir');
 }
 // Visualizador de fotos (comprovantes da prestação): foto grande, clique amplia, setas para navegar
 function verFotos(lista, inicio = 0) {
@@ -347,6 +356,10 @@ const confirmarDesfazer = d => confirmar(
 // ======================= DESPESAS DO CELULAR =======================
 // Todas as despesas enviadas pelo app, com filtro por status (inclui as recusadas, que não aparecem nos Lançamentos)
 const STATUS_COR = { 'Em análise': 'b-amber', Aprovada: 'b-green', Recusada: 'b-red' };
+const periodoDaDespesa = d => d.periodoId && (D.periodos || []).find(p => p.id === d.periodoId);
+const periodoTravado = d => { const p = periodoDaDespesa(d); return !!p && (p.status === 'Pago' || p.status === 'Pagando'); };
+// Status como aparece nas telas e no Excel: "Paga" quando o período foi pago
+const statusVisto = d => (d.status === 'Aprovada' && (periodoDaDespesa(d) || {}).status === 'Pago' ? 'Paga' : d.status);
 function telaDespesas() {
   const f = F.d;
   const busca = semAcento(f.busca);
@@ -392,6 +405,7 @@ function telaDespesas() {
         <td>${d.foto ? '📷' : '<span class="muted small">—</span>'}</td>
         <td><span class="chips">${d.status === 'Em análise'
           ? `<button class="btn xs ok" data-dap="${esc(d.id)}">Aprovar</button><button class="btn xs no" data-drc="${esc(d.id)}">Recusar</button>`
+          : periodoTravado(d) ? '<span class="muted small">período pago</span>'
           : `<button class="btn xs" data-dre="${esc(d.id)}">↩ Desfazer</button>`}</span></td></tr>`).join('')
         || `<tr class="empty-row"><td colspan="8">Nenhuma despesa para esse filtro.</td></tr>`}</tbody>
     </table></div></div>
@@ -416,9 +430,10 @@ function telaDespesas() {
   agir('data-dap', 'aprovar'); agir('data-drc', 'recusar'); agir('data-dre', 'reabrir');
   document.querySelectorAll('tr[data-desp]').forEach(tr => tr.addEventListener('click', () => modalNota(acha(tr.dataset.desp))));
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
-    [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Foto', 7)],
-    [...rows.map(d => [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, d.status, quando(d.avaliadoEm), d.foto ? 'Sim' : 'Não']),
-      ['Total', '', '', '', soma(rows), '', '', '', '']]));
+    [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
+    [...rows.map(d => { const p = periodoDaDespesa(d); return [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, statusVisto(d), quando(d.avaliadoEm),
+      p ? `${rotPeriodo(p)}${p.status === 'Pago' ? ' · pago em ' + diaBR(p.pagoEm) : ' · aguardando pagamento'}` : '', d.foto ? 'Sim' : 'Não']; }),
+      ['Total', '', '', '', soma(rows), '', '', '', '', '']]));
 }
 
 // ======================= 02 · NOVA PRESTAÇÃO =======================
@@ -625,8 +640,8 @@ function telaColaborador() {
         <div class="field"><label>Mês</label><select class="input" id="c-mes">${optsMes(f.mes)}</select></div>
       </div>
       <div class="card kpi"><span class="l">${mesN ? `Total em ${MESES[mesN - 1]}` : 'Total no ano'}</span><span class="v">${brl(sMes.total)}</span></div>
-      <div class="card kpi"><span class="l">Média nos meses com gasto</span><span class="v">${brl(comGasto.length ? s.total / comGasto.length : 0)}</span></div>
-      <div class="card kpi"><span class="l">Mês com maior gasto</span><span class="v sm">${s.total ? `${MESES[maxI]} · ${brl(porMes[maxI].total)}` : '—'}</span></div>
+      <div class="card kpi"><span class="l">Média nos meses com gasto${mesN ? ' (no ano)' : ''}</span><span class="v">${brl(comGasto.length ? s.total / comGasto.length : 0)}</span></div>
+      <div class="card kpi"><span class="l">Mês com maior gasto${mesN ? ' (no ano)' : ''}</span><span class="v sm">${s.total ? `${MESES[maxI]} · ${brl(porMes[maxI].total)}` : '—'}</span></div>
     </div>
     <div class="card chart-card"><h3>Gastos por mês</h3>
       <div class="bars${mesN ? ' filtrado' : ''}">${porMes.map((m, i) => `<div class="col${i + 1 === mesN ? ' sel' : ''}">${m.total ? `<span class="val">${fmt(m.total)}</span>` : ''}<div class="bar${m.total ? '' : ' zero'}" style="height:${m.total ? Math.max(3, m.total / max * 120) : 2}px"></div><span class="lab">${MES_CURTO[i]}</span></div>`).join('')}</div>
@@ -705,9 +720,15 @@ function telaFuncao() {
 // com o quadro por categoria e o total.
 // mes ('01'..'12' ou ''): só entra no nome do arquivo e no aviso; as linhas já vêm filtradas
 function pdfPrestacao(colab, ano, rows, mes = '') {
-  const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, s: somar(rs) })).filter(m => m.s.total > 0);
+  const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, rs, s: somar(rs) })).filter(m => m.s.total > 0);
   if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${mes ? MESES[Number(mes) - 1].toLowerCase() + '/' : ''}${ano}.`, 'Nada para exportar');
-  pdfFolhas(colab, meses.map(m => ({ periodo: `${MESES[m.i].toUpperCase()} / ${ano}`, s: m.s })),
+  // Este PDF soma o mês inteiro, inclusive o que já foi pago pela aba Pagamentos: avisa, para não pagar duas vezes
+  const jaPago = rs => r2(rs.flatMap(r => r.despesas || []).filter(d => statusVisto(d) === 'Paga').reduce((t, d) => t + d.valor, 0));
+  pdfFolhas(colab, meses.map(m => { const pg = jaPago(m.rs); return {
+    periodo: `${MESES[m.i].toUpperCase()} / ${ano}`, s: m.s,
+    carimbo: pg && pg >= m.s.total ? 'JÁ PAGO' : '',
+    nota: pg ? `Resumo do mês. Deste total, ${brl(pg)} já ${pg >= m.s.total ? 'foi pago' : 'foi pago em períodos da aba Pagamentos'} — não pague de novo.` : '',
+  }; }),
     `prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}${mes ? '-' + mes : ''}`);
 }
 // Gera o PDF: uma folha por item de "folhas" ({ periodo: texto do campo Período, s: somar(...), carimbo, nota })
@@ -771,7 +792,7 @@ function pdfFolhas(colab, folhas, nomeArquivo) {
 // Status: Enviado (aguardando pagamento) → Pago. Pagar só depois de analisar todas as notas do período.
 const notasDo = p => D.despesas.filter(d => d.periodoId === p.id).sort((a, b) => a.data.localeCompare(b.data));
 const somaAprov = l => r2(l.filter(d => d.status === 'Aprovada').reduce((s, d) => s + d.valor, 0));
-const rotPeriodo = p => `${dm(p.dataInicial)} a ${dmy(p.dataFinal)}`;
+const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
 // Despesa aprovada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
 const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.avaliadoEm && !!D.inicioPeriodos && d.avaliadoEm < D.inicioPeriodos;
@@ -862,6 +883,7 @@ function telaPagamentos() {
   document.querySelectorAll('[data-pagar]').forEach(b => b.onclick = async () => {
     const p = acha(b.dataset.pagar), notas = notasDo(p), anal = notas.filter(d => d.status === 'Em análise').length;
     if (anal) return avisar(`Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise neste período. Clique em "Ver notas" para aprovar ou recusar antes de pagar.`, 'Falta analisar');
+    if (!somaAprov(notas)) return avisar('Este período não tem nenhuma despesa aprovada: não há o que pagar. Use "Reabrir" para desfazer o período.', 'Nada para pagar');
     if (!(await confirmar(`${p.colaborador} · período ${rotPeriodo(p)}\nValor: ${brl(somaAprov(notas))} (despesas aprovadas)\n\nO colaborador verá "Paga" nessas despesas. Elas não poderão mais ser alteradas, a não ser que você desfaça o pagamento.`, { titulo: 'Marcar como pago?', ok: 'Marcar como pago' }))) return;
     acao('/api/admin/periodos/' + encodeURIComponent(p.id) + '/pagar')();
   });
@@ -882,7 +904,7 @@ function modalPeriodo(p) {
   const m = abrirModal(`<h3>${esc(p.colaborador)} · ${rotPeriodo(p)}</h3>
     <span class="muted small">${notas.length} nota${notas.length === 1 ? '' : 's'} · aprovado ${brl(somaAprov(notas))}${p.status === 'Pago' ? ` · pago em ${diaBR(p.pagoEm)}` : ''}</span>
     <div class="rows card">${notas.map(d => `<div data-nota="${esc(d.id)}" style="cursor:pointer"><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}<br><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span></span><span class="valor">${brl(d.valor)}</span></div>`).join('') || '<div><span class="muted">Nenhuma nota.</span></div>'}</div>
-    <span class="muted small">Clique numa nota para ver a foto e aprovar ou recusar.</span>
+    <span class="muted small">${p.status === 'Pago' ? 'Período pago: clique numa nota para ver a foto.' : 'Clique numa nota para ver a foto e aprovar ou recusar.'}</span>
     <div class="acts"><button class="btn" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = () => { fecharModal(); telaPagamentos(); };
   m.querySelectorAll('[data-nota]').forEach(el => el.onclick = () => modalNota(D.despesas.find(d => d.id === el.dataset.nota), () => modalPeriodo(D.periodos.find(x => x.id === p.id) || p)));
@@ -932,7 +954,7 @@ function telaColaboradores() {
         <td><span class="badge ${c.ativo ? 'b-green' : 'b-gray'}">${c.ativo ? 'Ativo' : 'Inativo'}</span></td>
         <td><span class="chips">${c.ativo
           ? `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-pw="${esc(c.id)}">Nova senha</button><button class="btn xs" data-off="${esc(c.id)}">Desativar</button>`
-          : `<button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
+          : `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
         || '<tr class="empty-row"><td colspan="7">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
     </table></div></div>`;
 
@@ -972,12 +994,12 @@ function baixarBackup() {
       col('Banco', 16), col('Agência', 9), col('Conta', 14), col('CPF', 16), col('PIX', 26), col('Ativo', 7), col('Criado em', 18)],
       linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, c.telefone, c.cidade, c.uf, c.banco, c.agencia, c.conta, c.cpf, c.pix, sim(c.ativo), quando(c.criadoEm)]) },
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
-    { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
-      linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
-    { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14), col('Foto', 7), col('Período', 12)],
-      linhas: D.despesas.map(d => [d.id, d.colaborador, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor, sim(d.foto), d.periodoId]) },
-    { nome: 'Períodos', colunas: [col('ID', 12), col('Colaborador', 26), col('Data inicial', 12), col('Data final', 12), col('Status', 10), col('Enviado em', 18), col('Enviado por', 18), col('Pago em', 18), col('Pago por', 14), col('Valor pago', 12, true)],
-      linhas: D.periodos.map(p => [p.id, p.colaborador, dmy(p.dataInicial), dmy(p.dataFinal), p.status, quando(p.fechadoEm), p.fechadoPor, quando(p.pagoEm), p.pagoPor, n2(p.valorPago)]) },
+    { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
+      linhas: D.prestacoes.map(p => [p.id, p.colaboradorId, p.nomeEpoca, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
+    { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14), col('Foto', 7), col('Período', 12)],
+      linhas: D.despesas.map(d => [d.id, d.colaboradorId, d.nomeEpoca, d.funcao, dmy(d.data), d.categoria, n2(d.valor), d.observacao, d.status, quando(d.criadoEm), quando(d.avaliadoEm), d.avaliadoPor, sim(d.foto), d.periodoId]) },
+    { nome: 'Períodos', colunas: [col('ID', 12), col('Colaborador ID', 12), col('Colaborador', 26), col('Data inicial', 12), col('Data final', 12), col('Status', 10), col('Enviado em', 18), col('Enviado por', 18), col('Pago em', 18), col('Pago por', 14), col('Valor pago', 12, true)],
+      linhas: D.periodos.map(p => [p.id, p.colaboradorId, p.nomeEpoca, dmy(p.dataInicial), dmy(p.dataFinal), p.status, quando(p.fechadoEm), p.fechadoPor, quando(p.pagoEm), p.pagoPor, n2(p.valorPago)]) },
   ]);
 }
 

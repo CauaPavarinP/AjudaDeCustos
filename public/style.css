@@ -125,7 +125,9 @@ td.obs-col { min-width: 140px; max-width: 280px; }
 .chart-card { padding: 16px 18px; }
 .chart-card h3 { margin: 0 0 12px; font-size: 13px; }
 .bars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; align-items: end; height: 160px; }
-.bars .col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+.bars .col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; min-width: 0; }
+/* celular: as 12 colunas precisam caber; os valores em cima das barras saem (aparecem na tabela) */
+@media (max-width: 480px) { .bars { gap: 3px; } .bars .val { display: none; } .bars .lab { font-size: 10px; } }
 .bars .bar { width: 60%; max-width: 32px; background: var(--primary); border-radius: 4px 4px 0 0; min-height: 2px; }
 .bars .bar.zero { background: var(--border); }
 .bars.filtrado .col:not(.sel) .bar { opacity: .3; } /* resumo com filtro de mês: destaca o mês escolhido */
@@ -246,6 +248,9 @@ td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: 
 .periodo-card .t { font-weight: 600; font-size: 14px; }
 .periodo-card .s { font-size: 12px; color: var(--muted); }
 .periodo-card .btn { margin-top: 4px; }
+.fab-espaco { height: 56px; flex-shrink: 0; } /* espaço no fim da lista para o botão + não cobrir a última despesa */
+.sem-rede { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; margin-top: 18vh; }
+.sem-rede h2 { margin: 0; }
 .dica-instalar { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
 .dica-instalar > b { color: var(--text); font-size: 13px; }
 /* foto da nota */
