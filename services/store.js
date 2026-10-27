@@ -35,6 +35,10 @@ const TABELAS = {
       ['status', 'Status'], ['fechadoEm', 'FechadoEm'], ['fechadoPor', 'FechadoPor'], ['pagoEm', 'PagoEm'], ['pagoPor', 'PagoPor'], ['valorPago', 'ValorPago']],
     num: ['valorPago'],
   },
+  // Configurações gravadas pelo próprio sistema (ex.: inicioPeriodos = quando o controle de pagamentos começou)
+  Config: {
+    cols: [['id', 'ID'], ['valor', 'Valor']],
+  },
 };
 
 const novoId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 10);
@@ -109,10 +113,12 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   const auth = new JWT({ email, key: privateKey, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   const doc = new GoogleSpreadsheet(spreadsheetId, auth);
 
-  // Cache curto para não estourar a cota de leitura da API do Google
+  // Cache curto para não estourar a cota de leitura da API do Google.
+  // versao[t] muda a cada gravação: uma leitura que começou antes de uma gravação não entra no cache
+  // (senão o dado velho ficaria guardado por mais 5 s).
   const CACHE_MS = 5000;
-  const cache = {};
-  const limpar = t => { delete cache[t]; };
+  const cache = {}, versao = {};
+  const limpar = t => { delete cache[t]; versao[t] = (versao[t] || 0) + 1; };
 
   async function prepararAba(titulo) {
     const colunas = TABELAS[titulo].cols.map(c => c[1]);
@@ -131,8 +137,9 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   async function linhas(t) {
     const c = cache[t];
     if (c && Date.now() - c.t < CACHE_MS) return c.rows;
+    const v = versao[t] || 0;
     const rows = await doc.sheetsByTitle[t].getRows();
-    cache[t] = { t: Date.now(), rows };
+    if ((versao[t] || 0) === v) cache[t] = { t: Date.now(), rows };
     return rows;
   }
   const acharLinha = async (t, id) => { limpar(t); return (await linhas(t)).find(r => String(r.get('ID')) === id); };
@@ -152,7 +159,9 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       await doc.loadInfo();
       for (const t of Object.keys(TABELAS)) await prepararAba(t);
     },
-    async list(t) {
+    // { fresco: true }: ignora o cache (para decisões que não podem usar dado de até 5 s atrás)
+    async list(t, { fresco } = {}) {
+      if (fresco) limpar(t);
       return (await linhas(t)).map(r => deLinha(t, r.toObject())).filter(o => o.id);
     },
     add: (t, obj) => naFila(t, async () => {

@@ -228,7 +228,7 @@ function telaEnviada() {
 // O colaborador fecha o período quando quiser (ex.: de 18 a 27) e as despesas vão juntas para pagamento.
 function cardPeriodo() {
   const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
-  const aguardando = despesas.filter(d => d.status === 'Aprovada' && d.periodo && d.periodo.status !== 'Pago').reduce((s, d) => s + d.valor, 0);
+  const aguardando = despesas.filter(d => d.status === 'Aprovada' && d.periodo && !['Pago', 'Anterior'].includes(d.periodo.status)).reduce((s, d) => s + d.valor, 0);
   if (!pend.length && !aguardando) return '';
   const datas = pend.map(d => d.data).sort();
   return `<div class="card periodo-card">
@@ -259,6 +259,7 @@ function telaDetalhe(d) {
     : d.status === 'Recusada' ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   const linhaPer = !d.periodo ? (d.status !== 'Recusada' ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
+    : d.periodo.status === 'Anterior' ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
     : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}</div>`
     : `<div class="okline gray">Enviada no período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}${d.status === 'Aprovada' ? ' · aguardando pagamento' : ''}</div>`;
   const editavel = d.status === 'Em análise' && !d.periodo; // depois de enviada num período, fica travada

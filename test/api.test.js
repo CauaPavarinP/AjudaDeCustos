@@ -32,10 +32,10 @@ before(async () => {
 after(() => servidor && servidor.kill());
 
 // Cliente simples que guarda o cookie de sessão (como um navegador)
-function cliente() {
+function cliente(base = B) { // base: outro servidor (usado num teste com configuração própria)
   let cookie = '';
   const chamar = async (metodo, url, corpo) => {
-    const r = await fetch(B + url, {
+    const r = await fetch(base + url, {
       method: metodo,
       headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
       body: corpo === undefined ? undefined : JSON.stringify(corpo),
@@ -169,7 +169,7 @@ test('períodos: colaborador fecha, notas travam, pagar exige análise, despesa 
   assert.equal(pago.dados.valorPago, 100);
   assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 409); // já pago
   assert.equal((await a.post(`/api/admin/despesas/${d1.id}/reabrir`)).status, 400); // despesa de período pago não muda
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 400); // pago não reabre
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 409); // pago não reabre
   assert.equal((await a.post(`/api/admin/periodos/${per.id}/desfazer-pagamento`)).status, 200);
   assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 200);
   assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d1.id).periodoId); // voltou a "não enviada"
@@ -177,6 +177,46 @@ test('períodos: colaborador fecha, notas travam, pagar exige análise, despesa 
   const fa = await a.post('/api/admin/periodos/fechar', { colaboradorId: id });
   assert.equal(fa.status, 201);
   assert.equal(fa.dados.notas, 2); // d1 (aprovada) e d3; d2 foi recusada
+});
+
+test('períodos: pagar e reabrir ao mesmo tempo não deixam os dois darem certo', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
+  await a.post(`/api/admin/despesas/${d.id}/aprovar`);
+  const per = (await c.post('/api/periodos/fechar')).dados.periodo;
+  const [pg, ra] = await Promise.all([a.post(`/api/admin/periodos/${per.id}/pagar`), a.post(`/api/admin/periodos/${per.id}/reabrir`)]);
+  assert.equal([pg.status, ra.status].filter(s => s === 200).length, 1, `pagar ${pg.status} · reabrir ${ra.status}`);
+  const dados = (await a.get('/api/admin/dados')).dados;
+  const p = dados.periodos.find(x => x.id === per.id), desp = dados.despesas.find(x => x.id === d.id);
+  if (pg.status === 200) assert.ok(p && p.status === 'Pago' && desp.periodoId === per.id); // pagou: período e nota continuam juntos
+  else assert.ok(!p && !desp.periodoId); // reabriu: período some e a nota volta a "não enviada"
+});
+
+// Servidor separado com o início do controle de pagamentos no futuro: tudo o que for aprovado conta como "antigo"
+test('períodos: despesas aprovadas antes do controle não entram sozinhas; o Maurício decide', async () => {
+  const porta = PORTA + 100, b2 = `http://localhost:${porta}`;
+  const env = { ...process.env, PORT: String(porta), NODE_ENV: '', SPREADSHEET_ID: '', GOOGLE_SERVICE_ACCOUNT_EMAIL: '', GOOGLE_PRIVATE_KEY: '',
+    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '', INICIO_PERIODOS: '2999-01-01T00:00:00.000Z' };
+  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'app.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    await new Promise((ok, falha) => { const t = setTimeout(() => falha(new Error('não subiu')), 10000); srv.stdout.on('data', x => { if (String(x).includes('rodando')) { clearTimeout(t); ok(); } }); });
+    const a = cliente(b2), c = cliente(b2);
+    await a.post('/api/admin/login', { usuario: 'admin', senha: 'admin' });
+    const col = (await a.post('/api/admin/colaboradores', { nome: 'Antigo Teste', usuario: 'antigo.teste', funcao: 'Vendedor' })).dados;
+    await c.post('/api/login', { usuario: 'antigo.teste', senha: col.senhaTemporaria });
+    const d1 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 40 })).dados;
+    const d2 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 2 })).dados;
+    await a.post(`/api/admin/despesas/${d1.id}/aprovar`); // aprovada "antes" do controle
+    const f = await c.post('/api/periodos/fechar');
+    assert.equal(f.dados.notas, 1); // só a d2 (em análise) entra; a antiga não
+    assert.equal((await c.get('/api/despesas')).dados.find(x => x.id === d1.id).periodo.status, 'Anterior');
+    const pagas = await a.post('/api/admin/periodos/antigas', { colaboradorId: col.id, jaPagas: true });
+    assert.equal(pagas.status, 201, JSON.stringify(pagas.dados));
+    assert.equal(pagas.dados.periodo.status, 'Pago');
+    assert.equal(pagas.dados.periodo.valorPago, 40);
+    assert.equal((await a.post('/api/admin/periodos/antigas', { colaboradorId: col.id })).status, 400); // nada mais pendente
+  } finally { srv.kill(); }
 });
 
 test('despesa: validações', async () => {

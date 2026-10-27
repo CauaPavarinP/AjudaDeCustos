@@ -64,7 +64,7 @@ async function carregar() {
   $('nav-pend').textContent = pend;
   $('nav-pend').classList.toggle('hidden', !pend);
   D.periodos = D.periodos || [];
-  const aPagar = D.periodos.filter(p => p.status === 'Enviado').length;
+  const aPagar = D.periodos.filter(p => p.status !== 'Pago').length;
   $('nav-pag').textContent = aPagar;
   $('nav-pag').classList.toggle('hidden', !aPagar);
 }
@@ -773,13 +773,28 @@ const notasDo = p => D.despesas.filter(d => d.periodoId === p.id).sort((a, b) =>
 const somaAprov = l => r2(l.filter(d => d.status === 'Aprovada').reduce((s, d) => s + d.valor, 0));
 const rotPeriodo = p => `${dm(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
-const naoEnviadas = colabId => D.despesas.filter(d => !d.periodoId && d.status !== 'Recusada' && (!colabId || d.colaboradorId === colabId));
+// Despesa aprovada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
+const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.avaliadoEm && !!D.inicioPeriodos && d.avaliadoEm < D.inicioPeriodos;
+const naoEnviadas = colabId => D.despesas.filter(d => !d.periodoId && d.status !== 'Recusada' && !antiga(d) && (!colabId || d.colaboradorId === colabId));
+// Card do topo de Pagamentos: despesas antigas por colaborador, para o Maurício decidir o que fazer com elas
+function blocoAntigas() {
+  const por = new Map();
+  for (const d of D.despesas.filter(antiga)) { const g = por.get(d.colaboradorId) || []; g.push(d); por.set(d.colaboradorId, g); }
+  if (!por.size) return '';
+  return `<div class="card pend"><h3>Despesas aprovadas antes do controle de pagamentos</h3>
+    <span class="muted small">Elas não entram sozinhas em nenhum período, porque podem já ter sido reembolsadas antes de o sistema controlar os pagamentos. Decida por colaborador:</span>
+    ${[...por].map(([id, l]) => { const ds = l.map(d => d.data).sort(), nome = (D.colaboradores.find(c => c.id === id) || l[0]).nome || l[0].colaborador; return `<div class="pend-row" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) auto">
+      <span><b>${esc(nome)}</b><br><span class="muted small">${l.length} despesa${l.length === 1 ? '' : 's'} · ${dm(ds[0])} a ${dmy(ds[ds.length - 1])}</span></span>
+      <span class="num"><b>${brl(l.reduce((s, d) => s + d.valor, 0))}</b></span>
+      <span class="acts"><button class="btn xs" data-ant-pagas="${esc(id)}">Já foram pagas</button><button class="btn xs ok" data-ant-incluir="${esc(id)}">Incluir para pagar</button></span></div>`; }).join('')}
+  </div>`;
+}
 function telaPagamentos() {
   const f = F.p;
   const todos = [...D.periodos].sort((a, b) => (b.dataFinal + b.fechadoEm).localeCompare(a.dataFinal + a.fechadoEm));
   const doColab = todos.filter(p => !f.colab || p.colaboradorId === f.colab);
-  const rows = doColab.filter(p => !f.status || p.status === f.status);
-  const aguardando = doColab.filter(p => p.status === 'Enviado');
+  const rows = doColab.filter(p => !f.status || (f.status === 'Pago' ? p.status === 'Pago' : p.status !== 'Pago'));
+  const aguardando = doColab.filter(p => p.status !== 'Pago'); // Enviado (e os estados de passagem Pagando/Reabrindo)
   const mesAtual = hoje().slice(0, 7);
   const pagosMes = doColab.filter(p => p.status === 'Pago' && diaBR(p.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
   const pend = naoEnviadas(f.colab);
@@ -787,6 +802,7 @@ function telaPagamentos() {
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Pagamentos</h1><p>Períodos enviados pelos colaboradores: confira, exporte o PDF e marque como pago</p></div>
       <div class="acts"><button class="btn secondary" id="p-fechar">Fechar período por um colaborador</button></div></div>
+    ${blocoAntigas()}
     <div class="card filters" style="grid-template-columns:1fr 2fr">
       <div class="field"><label>Colaborador</label><select class="input" id="p-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
       <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', doColab.length)}${chip('Enviado', 'Aguardando pagamento', aguardando.length)}${chip('Pago', 'Pagos', doColab.length - aguardando.length)}</div></div>
@@ -805,13 +821,16 @@ function telaPagamentos() {
         <td>${rotPeriodo(p)}<br><span class="muted small">enviado em ${diaBR(p.fechadoEm)}${p.fechadoPor && p.fechadoPor !== p.colaborador ? ' por ' + esc(p.fechadoPor) : ''}</span></td>
         <td>${notas.length}${anal ? `<br><span class="badge b-amber">${anal} em análise</span>` : ''}</td>
         <td class="num b">${fmt(p.status === 'Pago' ? p.valorPago : somaAprov(notas))}</td>
-        <td>${p.status === 'Pago' ? `<span class="badge b-blue">Pago em ${diaBR(p.pagoEm).slice(0, 5)}</span>` : '<span class="badge b-amber">Aguardando pagamento</span>'}</td>
+        <td>${p.status === 'Pago' ? `<span class="badge b-blue">Pago em ${diaBR(p.pagoEm).slice(0, 5)}</span>${/antes do sistema/.test(p.pagoPor) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
+          : p.status === 'Enviado' ? '<span class="badge b-amber">Aguardando pagamento</span>'
+          : `<span class="badge b-gray">${p.status === 'Pagando' ? 'Pagamento em andamento' : 'Reabertura em andamento'}</span><br><span class="muted small">se ficar parado, use o botão ao lado</span>`}</td>
         <td><span class="chips">
           <button class="btn xs" data-ver="${esc(p.id)}">Ver notas</button>
           <button class="btn xs" data-pdf="${esc(p.id)}">PDF</button>
           ${colab && colab.pix ? `<button class="btn xs" data-pix="${esc(colab.pix)}" title="Copiar a chave PIX de ${esc(colab.nome)}">📋 PIX</button>` : ''}
-          ${p.status === 'Pago'
+          ${p.status === 'Pago' || p.status === 'Pagando'
           ? `<button class="btn xs" data-despagar="${esc(p.id)}">Desfazer pagamento</button>`
+          : p.status === 'Reabrindo' ? `<button class="btn xs" data-reabrir="${esc(p.id)}">Reabrir</button>`
           : `<button class="btn xs ok" data-pagar="${esc(p.id)}">✔ Pagar</button><button class="btn xs" data-reabrir="${esc(p.id)}">Reabrir</button>`}
         </span></td></tr>`;
       }).join('') || '<tr class="empty-row"><td colspan="6">Nenhum período enviado ainda. Os colaboradores enviam pelo app ("Fechar período e enviar").</td></tr>'}</tbody>
@@ -823,6 +842,17 @@ function telaPagamentos() {
   $('p-colab').onchange = e => { f.colab = e.target.value; telaPagamentos(); };
   document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; telaPagamentos(); });
   $('p-fechar').onclick = modalFecharPeriodo;
+  const nomeDe = id => (D.colaboradores.find(c => c.id === id) || {}).nome || 'o colaborador';
+  document.querySelectorAll('[data-ant-pagas]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.antPagas;
+    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} viram um período marcado como "pago antes do sistema". Elas não serão pagas de novo.`, { titulo: 'Marcar como já pagas?', ok: 'Já foram pagas' }))) return;
+    try { await post('/api/admin/periodos/antigas', { colaboradorId: id, jaPagas: true }); await carregar(); telaPagamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
+  });
+  document.querySelectorAll('[data-ant-incluir]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.antIncluir;
+    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} viram um período "Aguardando pagamento", para você pagar agora.`, { titulo: 'Incluir para pagar?', ok: 'Incluir para pagar' }))) return;
+    try { await post('/api/admin/periodos/antigas', { colaboradorId: id }); await carregar(); telaPagamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
+  });
   document.querySelectorAll('[data-ver]').forEach(b => b.onclick = () => modalPeriodo(acha(b.dataset.ver)));
   document.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => pdfPeriodo(acha(b.dataset.pdf)));
   document.querySelectorAll('[data-pix]').forEach(b => b.onclick = async () => {
