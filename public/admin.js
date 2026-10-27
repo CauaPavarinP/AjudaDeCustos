@@ -817,12 +817,12 @@ function modalColab(c) {
     <div class="field"><label>Nome</label><input class="input" id="m-nome" maxlength="80" value="${c ? esc(c.nome) : ''}"></div>
     <div class="field"><label>Usuário (para entrar no app)</label><input class="input" id="m-user" maxlength="30" value="${c ? esc(c.usuario) : ''}" placeholder="ex.: joao.silva"></div>
     <div class="field"><label>Função</label><select class="input" id="m-func">${opt('', 'Selecione', '')}${D.funcoes.map(f => opt(f, f, c ? c.funcao : '')).join('')}</select></div>
-    <div class="field"><label>Telefone <span class="muted small">(opcional)</span></label><input class="input" id="m-tel" maxlength="20" inputmode="tel" value="${c ? esc(c.telefone) : ''}" placeholder="ex.: (47) 99999-9999"></div>
+    <div class="field"><label>Telefone</label><input class="input" id="m-tel" maxlength="20" inputmode="tel" value="${c ? esc(c.telefone) : ''}" placeholder="ex.: (47) 99999-9999"></div>
     <div class="row2" style="grid-template-columns:1fr 110px">
-      <div class="field"><label>Cidade <span class="muted small">(opcional)</span></label><input class="input" id="m-cid" maxlength="60" value="${c ? esc(c.cidade) : ''}" placeholder="ex.: Porto Alegre"></div>
+      <div class="field"><label>Cidade</label><input class="input" id="m-cid" maxlength="60" value="${c ? esc(c.cidade) : ''}" placeholder="ex.: Porto Alegre"></div>
       <div class="field"><label>UF</label><select class="input" id="m-uf">${opt('', '—', '')}${UFS.map(u => opt(u, u, c ? c.uf : '')).join('')}</select></div>
     </div>
-    <h4 class="form-sec">Dados bancários <span class="muted small">(opcional · saem no PDF)</span></h4>
+    <h4 class="form-sec">Dados bancários</h4>
     <div class="field"><label>Banco</label><input class="input" id="m-banco" maxlength="40" value="${c ? esc(c.banco) : ''}" placeholder="ex.: Nubank"></div>
     <div class="row2" style="grid-template-columns:1fr 1.4fr">
       <div class="field"><label>Agência</label><input class="input" id="m-ag" maxlength="15" inputmode="numeric" value="${c ? esc(c.agencia) : ''}" placeholder="ex.: 0001"></div>

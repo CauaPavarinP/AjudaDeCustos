@@ -100,7 +100,6 @@ tr.off td { color: var(--muted); }
 .empty-row td { text-align: center; color: var(--muted); padding: 24px; }
 .tag-app { font-size: 10px; font-weight: 600; color: var(--primary); background: var(--primary-soft); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
 .modal h4.form-sec { margin: 6px 0 -4px; font-size: 13px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; } /* título de seção dentro de um formulário */
-.modal h4.form-sec span { font-weight: 400; }
 .pend { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-color: #fde68a; background: #fffdf5; }
 .pend h3 { margin: 0; font-size: 14px; }
 .pend-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
