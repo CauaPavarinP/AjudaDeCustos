@@ -239,6 +239,13 @@ td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: 
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }
 .okline.amber { background: var(--amber-soft); color: var(--amber); }
 .okline.red { background: var(--red-soft); color: var(--red); }
+.okline.blue { background: var(--primary-soft); color: var(--primary-dark); }
+.okline.gray { background: #f1f5f9; color: var(--muted); }
+/* App: card das despesas ainda não enviadas para pagamento */
+.periodo-card { padding: 14px; display: flex; flex-direction: column; gap: 6px; border-color: var(--primary); }
+.periodo-card .t { font-weight: 600; font-size: 14px; }
+.periodo-card .s { font-size: 12px; color: var(--muted); }
+.periodo-card .btn { margin-top: 4px; }
 .dica-instalar { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
 .dica-instalar > b { color: var(--text); font-size: 13px; }
 /* foto da nota */

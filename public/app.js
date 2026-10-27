@@ -13,7 +13,11 @@ const VISUAL = {
   'Hotel': ['🏨', '#f3e8ff'], 'Transporte': ['🚌', '#e0f2fe'], 'Outros': ['🧾', '#fef3c7'],
 };
 const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; return `<span class="ic" style="background:${bg}">${e}</span>`; };
-const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
+const badge = st => `<span class="badge ${st === 'Paga' ? 'b-blue' : st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
+// Período de pagamento em que a despesa foi enviada (vem do servidor em d.periodo)
+const paga = d => d.status === 'Aprovada' && d.periodo && d.periodo.status === 'Pago';
+const statusVisto = d => (paga(d) ? 'Paga' : d.status);
+const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }).slice(0, 5);
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
@@ -133,16 +137,18 @@ async function telaInicio(recebidas) {
       <span class="v">${brl(total)}</span>
       <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
     </div>
+    ${cardPeriodo()}
     <div class="sec-title"><span>Minhas despesas</span>${mesSel !== 'todas' ? '<button class="link" id="i-todas">Ver todas</button>' : ''}</div>
     <div class="list" id="i-lista">
       ${lista.map(d => `<button class="item" data-id="${esc(d.id)}">${icone(d.categoria)}
         <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${d.observacao ? esc(d.observacao) + ' · ' : ''}${dm(d.data)}</div></div>
-        <div class="r"><b>${brl(d.valor)}</b>${badge(d.status)}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
+        <div class="r"><b>${brl(d.valor)}</b>${badge(statusVisto(d))}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
     </div>
     <button class="fab" id="i-fab" aria-label="Nova despesa">+</button>`, 'inicio');
   $('i-mes').onchange = e => { mesSel = e.target.value; telaInicio(); };
   if ($('i-todas')) $('i-todas').onclick = () => { mesSel = 'todas'; telaInicio(); };
   $('i-fab').onclick = telaNova;
+  if ($('i-fechar')) $('i-fechar').onclick = fecharPeriodo;
   document.querySelectorAll('#i-lista .item').forEach(b => b.onclick = () => telaDetalhe(despesas.find(d => d.id === b.dataset.id)));
 }
 
@@ -218,6 +224,33 @@ function telaEnviada() {
 }
 
 // ---------- C5 · Detalhe da despesa ----------
+// Card "não enviadas": despesas que ainda não estão em nenhum período (as recusadas não contam).
+// O colaborador fecha o período quando quiser (ex.: de 18 a 27) e as despesas vão juntas para pagamento.
+function cardPeriodo() {
+  const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
+  const aguardando = despesas.filter(d => d.status === 'Aprovada' && d.periodo && d.periodo.status !== 'Pago').reduce((s, d) => s + d.valor, 0);
+  if (!pend.length && !aguardando) return '';
+  const datas = pend.map(d => d.data).sort();
+  return `<div class="card periodo-card">
+    ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento</div>
+      <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${dm(datas[0])} a ${dm(datas[datas.length - 1])}</div>
+      <button class="btn block" id="i-fechar">Fechar período e enviar</button>` : ''}
+    ${aguardando ? `<div class="s">Aguardando pagamento: <b>${brl(aguardando)}</b> (aprovadas nos períodos enviados)</div>` : ''}
+  </div>`;
+}
+async function fecharPeriodo() {
+  const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
+  const datas = pend.map(d => d.data).sort();
+  const ok = await confirmar(`As ${pend.length} despesa${pend.length === 1 ? '' : 's'} de ${dm(datas[0])} a ${dm(datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) vão para o Maurício como um período de pagamento.\n\nDepois disso elas não podem mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
+    { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
+  if (!ok) return;
+  try {
+    const r = await api('/api/periodos/fechar', { method: 'POST', body: '{}' });
+    await telaInicio();
+    avisar(`Período de ${dm(r.periodo.dataInicial)} a ${dm(r.periodo.dataFinal)} enviado com ${r.notas} despesa${r.notas === 1 ? '' : 's'}.`, 'Período enviado');
+  } catch (err) { avisar(err.message, 'Não foi possível enviar'); telaInicio(); }
+}
+
 function telaDetalhe(d) {
   telaAtual = 'detalhe'; detalheId = d.id;
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
@@ -225,13 +258,17 @@ function telaDetalhe(d) {
   const linha = d.status === 'Aprovada' ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
     : d.status === 'Recusada' ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
+  const linhaPer = !d.periodo ? (d.status !== 'Recusada' ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
+    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}</div>`
+    : `<div class="okline gray">Enviada no período ${dm(d.periodo.dataInicial)} a ${dm(d.periodo.dataFinal)}${d.status === 'Aprovada' ? ' · aguardando pagamento' : ''}</div>`;
+  const editavel = d.status === 'Em análise' && !d.periodo; // depois de enviada num período, fica travada
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
     ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
        <span class="tip center">Toque na foto para ampliar.</span>`
     : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
-    ${d.status === 'Em análise' && fotosLigadas
+    ${editavel && fotosLigadas
     ? (d.foto ? '<button class="btn block secondary" id="d-trocar">📷 Trocar foto</button><div class="foto-box hidden" id="d-foto"></div>' : '<div class="foto-box" id="d-foto"></div>')
     : ''}
     <div class="card rows">
@@ -240,11 +277,12 @@ function telaDetalhe(d) {
       <div><span>Data da nota</span><span>${dmy(d.data)}</span></div>
       <div><span>Observação</span><span>${esc(d.observacao) || '—'}</span></div>
       <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
-      <div><span>Status</span><span>${badge(d.status)}</span></div>
+      <div><span>Status</span><span>${badge(statusVisto(d))}</span></div>
     </div>
     <div id="d-erro-foto" class="alert hidden"></div>
     ${linha}
-    ${d.status === 'Em análise' ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
+    ${linhaPer}
+    ${editavel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
   if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
   if ($('d-foto')) seletorFoto($('d-foto'), async f => {

@@ -141,6 +141,44 @@ test('colaborador: dados bancários (opcionais) vão para o painel, não para o 
   assert.equal((await a.post('/api/admin/colaboradores', { nome: 'CPF Errado', usuario: usuario + 'x', funcao: 'Vendedor', cpf: '123.456.789-00' })).status, 400);
 });
 
+test('períodos: colaborador fecha, notas travam, pagar exige análise, despesa paga não muda', async () => {
+  const a = await adminLogado();
+  const { c, id } = await novoColaborador(a);
+  const d1 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 100 })).dados;
+  const d2 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Alimentação', valor: 50 })).dados;
+  const rec = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 7 })).dados;
+  assert.equal((await a.post(`/api/admin/despesas/${rec.id}/recusar`)).status, 200);
+  const f = await c.post('/api/periodos/fechar');
+  assert.equal(f.status, 201, JSON.stringify(f.dados));
+  assert.equal(f.dados.notas, 2); // a recusada fica de fora
+  const per = f.dados.periodo;
+  assert.equal(per.dataInicial, ontem());
+  assert.equal((await c.post('/api/periodos/fechar')).status, 400); // nada novo para enviar
+  assert.equal((await c.del('/api/despesas/' + d1.id)).status, 400); // travada
+  const minhas = (await c.get('/api/despesas')).dados;
+  assert.equal(minhas.find(x => x.id === d1.id).periodo.status, 'Enviado');
+  // nova despesa fica para o próximo período
+  const d3 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 30 })).dados;
+  assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d3.id).periodoId);
+  // pagar com nota em análise é recusado
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 400);
+  await a.post(`/api/admin/despesas/${d1.id}/aprovar`);
+  await a.post(`/api/admin/despesas/${d2.id}/recusar`);
+  const pago = await a.post(`/api/admin/periodos/${per.id}/pagar`);
+  assert.equal(pago.status, 200, JSON.stringify(pago.dados));
+  assert.equal(pago.dados.valorPago, 100);
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 409); // já pago
+  assert.equal((await a.post(`/api/admin/despesas/${d1.id}/reabrir`)).status, 400); // despesa de período pago não muda
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 400); // pago não reabre
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/desfazer-pagamento`)).status, 200);
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 200);
+  assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d1.id).periodoId); // voltou a "não enviada"
+  // o Maurício também fecha pelo colaborador
+  const fa = await a.post('/api/admin/periodos/fechar', { colaboradorId: id });
+  assert.equal(fa.status, 201);
+  assert.equal(fa.dados.notas, 2); // d1 (aprovada) e d3; d2 foi recusada
+});
+
 test('despesa: validações', async () => {
   const a = await adminLogado();
   const { c } = await novoColaborador(a);

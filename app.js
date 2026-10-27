@@ -23,6 +23,7 @@ const NOMES_CAT = CATEGORIAS.map(c => c.nome);
 const FUNCOES_INICIAIS = ['Vendedor', 'Promotora'];
 const VALOR_MAXIMO = 50000;
 const STATUS = { analise: 'Em análise', aprovada: 'Aprovada', recusada: 'Recusada' };
+const PERIODO = { enviado: 'Enviado', pago: 'Pago' }; // Enviado = fechado, aguardando pagamento
 
 for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   if (!process.env[v]) {
@@ -244,9 +245,36 @@ app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
 }));
 
 app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
-  const lista = (await store.list('Despesas')).filter(d => d.colaboradorId === req.colab.id)
+  const [todas, periodos] = await Promise.all([store.list('Despesas'), store.list('Periodos')]);
+  const lista = todas.filter(d => d.colaboradorId === req.colab.id)
     .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
-  res.json(lista.map(publicoDesp));
+  // Cada despesa vai com o período em que foi enviada (datas, status e data do pagamento)
+  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm }]));
+  res.json(lista.map(d => ({ ...publicoDesp(d), periodo: per.get(d.periodoId) || null })));
+}));
+
+// ---- períodos (fechar as despesas ainda não enviadas e mandar para pagamento) ----
+// Junta as despesas do colaborador que ainda não estão em nenhum período (em análise ou aprovadas; recusadas
+// ficam de fora). As datas do período vão da nota mais antiga à mais recente.
+async function fecharPeriodo(colab, quem) {
+  const candidatas = (await store.list('Despesas')).filter(d => d.colaboradorId === colab.id && !d.periodoId && d.status !== STATUS.recusada);
+  if (!candidatas.length) return { erro: 'Não há despesas para enviar: todas já estão em algum período.' };
+  const p = { id: novoId(), colaboradorId: colab.id, colaborador: colab.nome, dataInicial: '', dataFinal: '', status: PERIODO.enviado,
+    fechadoEm: new Date().toISOString(), fechadoPor: quem, pagoEm: '', pagoPor: '', valorPago: 0 };
+  await store.add('Periodos', p);
+  const datas = [];
+  for (const d of candidatas) { // condição: se outra tela já colocou a despesa num período, não mexe
+    const ok = await store.update('Despesas', d.id, { periodoId: p.id }, a => !a.periodoId);
+    if (ok) datas.push(d.data);
+  }
+  if (!datas.length) { await store.remove('Periodos', p.id); return { erro: 'Essas despesas acabaram de ser enviadas em outra tela.', status: 409 }; }
+  datas.sort();
+  return { periodo: await store.update('Periodos', p.id, { dataInicial: datas[0], dataFinal: datas[datas.length - 1] }), notas: datas.length };
+}
+app.post('/api/periodos/fechar', exigeColab, wrap(async (req, res) => {
+  const r = await fecharPeriodo(req.colab, req.colab.nome);
+  if (r.erro) return erro(res, r.erro, r.status || 400);
+  res.status(201).json(r);
 }));
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
@@ -287,6 +315,7 @@ app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
   const d = await minhaDespesa(req);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   if (d.status !== STATUS.analise) return erro(res, 'Só dá para mudar a foto enquanto a despesa está em análise.');
+  if (d.periodoId) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser alterada.');
   const f = await guardarFoto(d.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
   const atual = await store.update('Despesas', d.id, { foto: f.ref });
@@ -298,6 +327,7 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
   const d = (await store.list('Despesas')).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
+  if (d.periodoId) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser excluída.');
   await store.remove('Despesas', d.id);
   apagarFoto(d.foto);
   res.json({ ok: true });
@@ -320,13 +350,13 @@ app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
 app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
-  const [colaboradores, funcoes, prestacoes, despesas] = await Promise.all(
-    ['Colaboradores', 'Funcoes', 'Prestacoes', 'Despesas'].map(t => store.list(t)));
+  const [colaboradores, funcoes, prestacoes, despesas, periodos] = await Promise.all(
+    ['Colaboradores', 'Funcoes', 'Prestacoes', 'Despesas', 'Periodos'].map(t => store.list(t)));
   res.json({
     categorias: CATEGORIAS,
     funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
     colaboradores: colaboradores.map(adminColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
-    prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp),
+    prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp), periodos,
     fotos: !!fotos,
   });
 }));
@@ -506,6 +536,9 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   // Aprovar/recusar só o que está em análise; desfazer só o que já foi avaliado. Evita que uma aba
   // com dados antigos troque, sem avisar, uma decisão já tomada em outra aba.
   const pode = atual => (acao === 'reabrir' ? atual.status !== STATUS.analise : atual.status === STATUS.analise);
+  const antes = (await store.list('Despesas')).find(x => x.id === String(req.params.id));
+  const per = antes && antes.periodoId && (await store.list('Periodos')).find(p => p.id === antes.periodoId);
+  if (per && per.status === PERIODO.pago) return erro(res, 'Esta despesa está num período já pago. Desfaça o pagamento do período antes de mudar a despesa.');
   const d = await store.update('Despesas', String(req.params.id), {
     status,
     avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
@@ -517,6 +550,45 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
 }));
 app.get('/api/admin/despesas/:id/foto', exigeAdmin, wrap(async (req, res) =>
   enviarFoto(res, (await store.list('Despesas')).find(x => x.id === req.params.id))));
+
+// ---- períodos de pagamento (painel) ----
+const acharPeriodo = async id => (await store.list('Periodos')).find(p => p.id === String(id));
+// O Maurício também pode fechar o período por um colaborador (ex.: se ele esqueceu)
+app.post('/api/admin/periodos/fechar', exigeAdmin, wrap(async (req, res) => {
+  const c = (await store.list('Colaboradores')).find(x => x.id === String(req.body.colaboradorId || ''));
+  if (!c) return erro(res, 'Escolha o colaborador.');
+  const r = await fecharPeriodo(c, ADMIN_NOME);
+  if (r.erro) return erro(res, r.erro, r.status || 400);
+  res.status(201).json(r);
+}));
+// Reabrir: desfaz o envio (as despesas voltam a ficar "não enviadas"). Só enquanto não foi pago.
+app.post('/api/admin/periodos/:id/reabrir', exigeAdmin, wrap(async (req, res) => {
+  const p = await acharPeriodo(req.params.id);
+  if (!p) return erro(res, 'Período não encontrado.', 404);
+  if (p.status !== PERIODO.enviado) return erro(res, 'Período já pago: desfaça o pagamento antes de reabrir.');
+  for (const d of (await store.list('Despesas')).filter(x => x.periodoId === p.id)) await store.update('Despesas', d.id, { periodoId: '' });
+  await store.remove('Periodos', p.id);
+  res.json({ ok: true });
+}));
+// Pagar: só depois de todas as notas do período terem sido aprovadas ou recusadas. Guarda o valor pago.
+app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
+  const p = await acharPeriodo(req.params.id);
+  if (!p) return erro(res, 'Período não encontrado.', 404);
+  const notas = (await store.list('Despesas')).filter(x => x.periodoId === p.id);
+  const analise = notas.filter(x => x.status === STATUS.analise).length;
+  if (analise) return erro(res, `Ainda há ${analise} despesa${analise > 1 ? 's' : ''} em análise neste período. Aprove ou recuse antes de pagar.`);
+  const valorPago = r2(notas.filter(x => x.status === STATUS.aprovada).reduce((t, x) => t + x.valor, 0));
+  const r = await store.update('Periodos', p.id, { status: PERIODO.pago, pagoEm: new Date().toISOString(), pagoPor: ADMIN_NOME, valorPago },
+    a => a.status === PERIODO.enviado);
+  if (r === false) return erro(res, 'Este período já foi pago em outra tela.', 409);
+  res.json(r);
+}));
+app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => {
+  const r = await store.update('Periodos', String(req.params.id), { status: PERIODO.enviado, pagoEm: '', pagoPor: '', valorPago: 0 }, a => a.status === PERIODO.pago);
+  if (r === null) return erro(res, 'Período não encontrado.', 404);
+  if (r === false) return erro(res, 'Este período não está pago.', 409);
+  res.json(r);
+}));
 
 // ---------------- páginas ----------------
 // no-cache: o navegador sempre confere se há versão nova (evita admin.html antigo com admin.js novo)

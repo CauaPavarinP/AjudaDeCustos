@@ -25,8 +25,15 @@ const TABELAS = {
   Despesas: {
     cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['funcao', 'Funcao'],
       ['data', 'Data'], ['categoria', 'Categoria'], ['valor', 'Valor'], ['observacao', 'Observacao'], ['status', 'Status'],
-      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor'], ['foto', 'Foto']],
+      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor'], ['foto', 'Foto'],
+      ['periodoId', 'PeriodoID']],
     num: ['valor'],
+  },
+  // Período de pagamento: um grupo de despesas do celular "fechado" pelo colaborador (ou pelo Maurício) e depois pago
+  Periodos: {
+    cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['dataInicial', 'DataInicial'], ['dataFinal', 'DataFinal'],
+      ['status', 'Status'], ['fechadoEm', 'FechadoEm'], ['fechadoPor', 'FechadoPor'], ['pagoEm', 'PagoEm'], ['pagoPor', 'PagoPor'], ['valorPago', 'ValorPago']],
+    num: ['valorPago'],
   },
 };
 
