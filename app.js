@@ -141,6 +141,16 @@ const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length, fotosV: refsPrest
 const posFoto = (refs, n, v) => (v ? refs.findIndex(r => versaoFoto(r) === v) : Number(n));
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm,
   telefone: c.telefone || '', cidade: c.cidade || '', uf: c.uf || '' });
+// Para o painel: inclui os dados bancários (saem no PDF). O app do colaborador não recebe esses dados.
+const adminColab = c => ({ ...publicoColab(c), banco: c.banco || '', agencia: c.agencia || '', conta: c.conta || '', cpf: c.cpf || '', pix: c.pix || '' });
+// CPF com 11 dígitos e dígitos verificadores certos (pega erro de digitação); devolve no formato 000.000.000-00
+function cpfFormatado(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1+$/.test(d)) return '';
+  const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  if (dv(9) !== Number(d[9]) || dv(10) !== Number(d[10])) return '';
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
 const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
 // Bloqueio simples contra tentativas de adivinhar senha. Dois contadores:
@@ -315,7 +325,7 @@ app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
   res.json({
     categorias: CATEGORIAS,
     funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
-    colaboradores: colaboradores.map(publicoColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+    colaboradores: colaboradores.map(adminColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
     prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp),
     fotos: !!fotos,
   });
@@ -353,12 +363,16 @@ async function validarColab(body, idAtual) {
   const telefone = texto(body.telefone, 20), cidade = texto(body.cidade, 60), uf = texto(body.uf, 2).toUpperCase();
   if (nome.length < 2) return { erro: 'Informe o nome.' };
   if (uf && !UFS.includes(uf)) return { erro: 'Escolha a UF da lista.' };
+  // Dados bancários (opcionais, saem no PDF)
+  const banco = texto(body.banco, 40), agencia = texto(body.agencia, 15), conta = texto(body.conta, 25), pix = texto(body.pix, 80);
+  const cpfDigitado = texto(body.cpf, 20), cpf = cpfFormatado(cpfDigitado);
+  if (cpfDigitado && !cpf) return { erro: 'CPF inválido. Confira os números.' };
   if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
   const funcoes = (await store.list('Funcoes')).map(f => f.nome);
   if (!funcoes.includes(funcao)) return { erro: 'Escolha uma função cadastrada.' };
   const todos = await store.list('Colaboradores');
   if (todos.some(c => c.usuario === usuario && c.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
-  return { nome, usuario, funcao, telefone, cidade, uf };
+  return { nome, usuario, funcao, telefone, cidade, uf, banco, agencia, conta, cpf, pix };
 }
 
 app.post('/api/admin/colaboradores', exigeAdmin, wrap(async (req, res) => {
@@ -367,7 +381,7 @@ app.post('/api/admin/colaboradores', exigeAdmin, wrap(async (req, res) => {
   const senha = senhaTemporaria();
   const c = { id: novoId(), ...v, ativo: true, senhaHash: hashSenha(senha), criadoEm: new Date().toISOString() };
   await store.add('Colaboradores', c);
-  res.status(201).json({ ...publicoColab(c), senhaTemporaria: senha });
+  res.status(201).json({ ...adminColab(c), senhaTemporaria: senha });
 }));
 
 app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
@@ -383,7 +397,7 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   if (req.body.novaSenha) { senha = senhaTemporaria(); campos.senhaHash = hashSenha(senha); }
   const c = await store.update('Colaboradores', id, campos);
   if (!c) return erro(res, 'Colaborador não encontrado.', 404);
-  res.json({ ...publicoColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
+  res.json({ ...adminColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
 }));
 
 // Só exclui colaborador sem nenhum lançamento; quem tem histórico deve ser desativado,

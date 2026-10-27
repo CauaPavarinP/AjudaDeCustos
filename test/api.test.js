@@ -126,6 +126,21 @@ test('colaborador: telefone, cidade e UF (opcionais) são guardados; UF fora da 
   assert.deepEqual([sem.dados.telefone, sem.dados.cidade, sem.dados.uf], ['', '', '']);
 });
 
+test('colaborador: dados bancários (opcionais) vão para o painel, não para o app; CPF inválido é recusado', async () => {
+  const a = await adminLogado();
+  const usuario = 'banco' + Date.now().toString(36);
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Com Banco', usuario, funcao: 'Vendedor', banco: 'Banco Teste', agencia: '0001', conta: '1234-5', cpf: '12345678909', pix: 'chave-teste' });
+  assert.equal(r.status, 201, JSON.stringify(r.dados));
+  assert.deepEqual([r.dados.banco, r.dados.agencia, r.dados.conta, r.dados.cpf, r.dados.pix], ['Banco Teste', '0001', '1234-5', '123.456.789-09', 'chave-teste']);
+  const noPainel = (await a.get('/api/admin/dados')).dados.colaboradores.find(c => c.id === r.dados.id);
+  assert.equal(noPainel.cpf, '123.456.789-09');
+  const c = cliente();
+  assert.equal((await c.post('/api/login', { usuario, senha: r.dados.senhaTemporaria })).status, 200);
+  const me = (await c.get('/api/me')).dados;
+  assert.ok(!('cpf' in me) && !('conta' in me) && !('pix' in me), JSON.stringify(me));
+  assert.equal((await a.post('/api/admin/colaboradores', { nome: 'CPF Errado', usuario: usuario + 'x', funcao: 'Vendedor', cpf: '123.456.789-00' })).status, 400);
+});
+
 test('despesa: validações', async () => {
   const a = await adminLogado();
   const { c } = await novoColaborador(a);

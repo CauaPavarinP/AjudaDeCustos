@@ -739,6 +739,10 @@ function pdfPrestacao(colab, ano, rows, mes = '') {
     }
     doc.texto(xV + 12, y + 20, 'R$', { tam: 12, negrito: true });
     doc.texto(DIR - 8, y + 20, fmt(s.total), { tam: 12, negrito: true, alinhar: 'dir' });
+    // Dados bancários do colaborador (como na folha): só as linhas preenchidas
+    const banco = [colab.banco && colab.banco.toUpperCase(), colab.agencia && 'AG - ' + colab.agencia, colab.conta && 'C/C - ' + colab.conta,
+      colab.cpf && 'CPF - ' + colab.cpf, colab.pix && 'PIX - ' + colab.pix].filter(Boolean);
+    banco.forEach((t, k) => doc.texto(E + 10, y + 70 + k * 19, doc.caber(t, DIR - E - 10, 12, true), { tam: 12, negrito: true, italico: true }));
     rodape();
   }
   doc.baixar(`prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${ano}${mes ? '-' + mes : ''}`);
@@ -796,8 +800,9 @@ function baixarBackup() {
   const sim = b => (b ? 'Sim' : 'Não');
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
   baixarXlsx(`backup-ajuda-de-custo-${hoje()}`, [
-    { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Telefone', 16), col('Cidade', 20), col('UF', 5), col('Ativo', 7), col('Criado em', 18)],
-      linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, c.telefone, c.cidade, c.uf, sim(c.ativo), quando(c.criadoEm)]) },
+    { nome: 'Colaboradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Função', 14), col('Telefone', 16), col('Cidade', 20), col('UF', 5),
+      col('Banco', 16), col('Agência', 9), col('Conta', 14), col('CPF', 16), col('PIX', 26), col('Ativo', 7), col('Criado em', 18)],
+      linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, c.telefone, c.cidade, c.uf, c.banco, c.agencia, c.conta, c.cpf, c.pix, sim(c.ativo), quando(c.criadoEm)]) },
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
     { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
       linhas: D.prestacoes.map(p => [p.id, p.colaborador, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
@@ -817,6 +822,14 @@ function modalColab(c) {
       <div class="field"><label>Cidade <span class="muted small">(opcional)</span></label><input class="input" id="m-cid" maxlength="60" value="${c ? esc(c.cidade) : ''}" placeholder="ex.: Porto Alegre"></div>
       <div class="field"><label>UF</label><select class="input" id="m-uf">${opt('', '—', '')}${UFS.map(u => opt(u, u, c ? c.uf : '')).join('')}</select></div>
     </div>
+    <h4 class="form-sec">Dados bancários <span class="muted small">(opcional · saem no PDF)</span></h4>
+    <div class="field"><label>Banco</label><input class="input" id="m-banco" maxlength="40" value="${c ? esc(c.banco) : ''}" placeholder="ex.: Nubank"></div>
+    <div class="row2" style="grid-template-columns:1fr 1.4fr">
+      <div class="field"><label>Agência</label><input class="input" id="m-ag" maxlength="15" inputmode="numeric" value="${c ? esc(c.agencia) : ''}" placeholder="ex.: 0001"></div>
+      <div class="field"><label>Conta corrente</label><input class="input" id="m-cc" maxlength="25" value="${c ? esc(c.conta) : ''}" placeholder="ex.: 12345678-9"></div>
+    </div>
+    <div class="field"><label>CPF</label><input class="input" id="m-cpf" maxlength="20" inputmode="numeric" value="${c ? esc(c.cpf) : ''}" placeholder="000.000.000-00"></div>
+    <div class="field"><label>Chave PIX</label><input class="input" id="m-pix" maxlength="80" value="${c ? esc(c.pix) : ''}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
     ${c ? '' : '<span class="muted small">A senha inicial é gerada automaticamente e aparece depois de salvar.</span>'}
     <div id="m-erro" class="alert hidden"></div>
     <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Salvar</button></div>`);
@@ -827,7 +840,9 @@ function modalColab(c) {
   m.querySelector('#m-cancel').onclick = fecharModal;
   m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
     const corpo = { nome: m.querySelector('#m-nome').value, usuario: user.value, funcao: m.querySelector('#m-func').value,
-      telefone: m.querySelector('#m-tel').value, cidade: m.querySelector('#m-cid').value, uf: m.querySelector('#m-uf').value };
+      telefone: m.querySelector('#m-tel').value, cidade: m.querySelector('#m-cid').value, uf: m.querySelector('#m-uf').value,
+      banco: m.querySelector('#m-banco').value, agencia: m.querySelector('#m-ag').value, conta: m.querySelector('#m-cc').value,
+      cpf: m.querySelector('#m-cpf').value, pix: m.querySelector('#m-pix').value };
     try {
       const r = c ? await post('/api/admin/colaboradores/' + encodeURIComponent(c.id), corpo, 'PUT') : await post('/api/admin/colaboradores', corpo);
       await carregar(); telaColaboradores();

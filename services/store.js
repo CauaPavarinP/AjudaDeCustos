@@ -8,7 +8,8 @@ const crypto = require('crypto');
 const TABELAS = {
   Colaboradores: {
     cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'],
-      ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF']],
+      ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF'],
+      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX']],
     bool: ['ativo'],
   },
   Funcoes: {
