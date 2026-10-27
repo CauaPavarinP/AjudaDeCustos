@@ -27,10 +27,21 @@ const STATUS = { analise: 'Em análise', aprovada: 'Aprovada', recusada: 'Recusa
 // enquanto o pagamento ou a reabertura acontece (evita que as duas ações rodem juntas).
 const PERIODO = { enviado: 'Enviado', pago: 'Pago', pagando: 'Pagando', reabrindo: 'Reabrindo' };
 const travado = p => p && (p.status === PERIODO.pago || p.status === PERIODO.pagando); // despesas desse período não mudam
+// Trava por período: pagar, reabrir e mudar o status de uma nota do mesmo período rodam um de cada vez,
+// sem se cruzar. Vale porque o sistema roda num servidor só (uma instância no Render).
+const travas = new Map();
+function comTrava(chave, tarefa) {
+  const vez = (travas.get(chave) || Promise.resolve()).then(tarefa, tarefa);
+  const fim = vez.catch(() => {});
+  travas.set(chave, fim);
+  fim.then(() => { if (travas.get(chave) === fim) travas.delete(chave); });
+  return vez;
+}
 // Início do controle de pagamentos (gravado na aba Config na primeira vez que o servidor sobe com esta versão).
 // Despesas aprovadas ANTES disso podem já ter sido reembolsadas fora do sistema: não entram sozinhas num período.
 let INICIO_PERIODOS = '';
-const anterior = d => !d.periodoId && d.status === STATUS.aprovada && !!d.avaliadoEm && d.avaliadoEm < INICIO_PERIODOS;
+// Pela data de LANÇAMENTO: uma despesa antiga reaberta e aprovada de novo continua sendo antiga
+const anterior = d => !d.periodoId && d.status === STATUS.aprovada && !!d.criadoEm && d.criadoEm < INICIO_PERIODOS;
 
 for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   if (!process.env[v]) {
@@ -355,6 +366,7 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
   if (d.periodoId) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser excluída.');
   const r = await store.remove('Despesas', d.id, a => a.status === STATUS.analise && !a.periodoId); // confere de novo na hora de apagar
   if (r === 'conflito') return erro(res, 'Esta despesa acabou de ser aprovada ou enviada num período e não pode mais ser excluída.', 409);
+  if (r && r.foto !== d.foto) apagarFoto(r.foto); // a foto foi trocada durante a exclusão: apaga a que estava na linha
   apagarFoto(d.foto);
   res.json({ ok: true });
 }));
@@ -516,8 +528,8 @@ app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
 app.delete('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
   const p = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
   if (!p) return erro(res, 'Prestação não encontrada.', 404);
-  await store.remove('Prestacoes', p.id);
-  refsPrest(p).forEach(apagarFoto);
+  const apagada = await store.remove('Prestacoes', p.id);
+  refsPrest(apagada && apagada.id ? apagada : p).forEach(apagarFoto); // fotos que estavam na linha na hora (inclui uma enviada há pouco)
   res.json({ ok: true });
 }));
 
@@ -568,23 +580,27 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   // Aprovar/recusar só o que está em análise; desfazer só o que já foi avaliado. Evita que uma aba
   // com dados antigos troque, sem avisar, uma decisão já tomada em outra aba.
   const pode = atual => (acao === 'reabrir' ? atual.status !== STATUS.analise : atual.status === STATUS.analise);
-  const MSG_PAGO = 'Esta despesa está num período já pago (ou sendo pago). Desfaça o pagamento do período antes de mudar a despesa.';
-  const periodoDe = async id => (await store.list('Periodos', { fresco: true })).find(p => p.id === id);
-  const antes = (await store.list('Despesas', { fresco: true })).find(x => x.id === String(req.params.id));
-  if (antes && antes.periodoId && travado(await periodoDe(antes.periodoId))) return erro(res, MSG_PAGO);
-  const d = await store.update('Despesas', String(req.params.id), {
-    status,
-    avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
-    avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
-  }, pode);
-  if (d === null) return erro(res, 'Despesa não encontrada.', 404);
-  if (d === false) return erro(res, 'Esta despesa já foi alterada em outra tela. A lista foi atualizada; confira o status atual.', 409);
-  // Confere de novo depois de gravar: se o pagamento do período começou no meio, desfaz a mudança na despesa
-  if (d.periodoId && travado(await periodoDe(d.periodoId))) {
-    await store.update('Despesas', d.id, { status: antes.status, avaliadoEm: antes.avaliadoEm, avaliadoPor: antes.avaliadoPor });
-    return erro(res, MSG_PAGO, 409);
-  }
-  res.json(publicoDesp(d));
+  const id = String(req.params.id);
+  const antes = (await store.list('Despesas', { fresco: true })).find(x => x.id === id);
+  if (!antes) return erro(res, 'Despesa não encontrada.', 404);
+  // Despesa num período: roda com a trava do período (não cruza com um pagamento em andamento)
+  const mudar = async () => {
+    const agora = (await store.list('Despesas', { fresco: true })).find(x => x.id === id);
+    if (agora && agora.periodoId) {
+      const per = (await store.list('Periodos', { fresco: true })).find(p => p.id === agora.periodoId);
+      if (travado(per)) return { erro: 'Esta despesa está num período já pago. Desfaça o pagamento do período antes de mudar a despesa.', status: 400 };
+    }
+    return { d: await store.update('Despesas', id, {
+      status,
+      avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
+      avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
+    }, a => pode(a) && (a.periodoId || '') === (agora ? agora.periodoId || '' : '')) };
+  };
+  const r = antes.periodoId ? await comTrava('periodo:' + antes.periodoId, mudar) : await mudar();
+  if (r.erro) return erro(res, r.erro, r.status);
+  if (r.d === null) return erro(res, 'Despesa não encontrada.', 404);
+  if (r.d === false) return erro(res, 'Esta despesa já foi alterada em outra tela. A lista foi atualizada; confira o status atual.', 409);
+  res.json(publicoDesp(r.d));
 }));
 app.get('/api/admin/despesas/:id/foto', exigeAdmin, wrap(async (req, res) =>
   enviarFoto(res, (await store.list('Despesas')).find(x => x.id === req.params.id))));
@@ -610,7 +626,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
 }));
 // Reabrir: desfaz o envio (as despesas voltam a ficar "não enviadas"). Só enquanto não foi pago.
 // Primeiro "reserva" o período (Reabrindo): se um pagamento começar ao mesmo tempo, um dos dois é recusado.
-app.post('/api/admin/periodos/:id/reabrir', exigeAdmin, wrap(async (req, res) => {
+app.post('/api/admin/periodos/:id/reabrir', exigeAdmin, wrap(async (req, res) => comTrava('periodo:' + req.params.id, async () => {
   const id = String(req.params.id);
   const r = await store.update('Periodos', id, { status: PERIODO.reabrindo }, a => a.status === PERIODO.enviado || a.status === PERIODO.reabrindo);
   if (r === null) return erro(res, 'Período não encontrado.', 404);
@@ -618,11 +634,11 @@ app.post('/api/admin/periodos/:id/reabrir', exigeAdmin, wrap(async (req, res) =>
   for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === id)) await store.update('Despesas', d.id, { periodoId: '' });
   await store.remove('Periodos', id);
   res.json({ ok: true });
-}));
+})));
 // Pagar: só depois de todas as notas do período terem sido aprovadas ou recusadas. Guarda o valor pago.
 // Em duas etapas: reserva o período (Pagando), lê as notas atualizadas, confere e só então grava Pago.
 // Enquanto está "Pagando", nenhuma nota do período pode ser aprovada, recusada ou desfeita.
-app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
+app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => comTrava('periodo:' + req.params.id, async () => {
   const id = String(req.params.id);
   const r = await store.update('Periodos', id, { status: PERIODO.pagando }, a => a.status === PERIODO.enviado);
   if (r === null) return erro(res, 'Período não encontrado.', 404);
@@ -642,15 +658,23 @@ app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
     a => a.status === PERIODO.pagando);
   if (!pago) return erro(res, 'O pagamento foi interrompido em outra tela. A lista foi atualizada; confira o período.', 409);
   res.json(pago);
-}));
+})));
 // Desfazer pagamento (também destrava um período que ficou "Pagando" por uma falha no meio do caminho)
-app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => {
+app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => comTrava('periodo:' + req.params.id, async () => {
+  // Período marcado como "pago antes do sistema": desfazer volta as despesas para a caixa das antigas
+  // (e não para "Aguardando pagamento", o que permitiria pagá-las de novo)
+  const p = await acharPeriodo(req.params.id);
+  if (p && p.status === PERIODO.pago && /antes do sistema/.test(p.pagoPor || '')) {
+    for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === p.id)) await store.update('Despesas', d.id, { periodoId: '' });
+    await store.remove('Periodos', p.id);
+    return res.json({ ok: true, antigas: true });
+  }
   const r = await store.update('Periodos', String(req.params.id), { status: PERIODO.enviado, pagoEm: '', pagoPor: '', valorPago: 0 },
     a => a.status === PERIODO.pago || a.status === PERIODO.pagando);
   if (r === null) return erro(res, 'Período não encontrado.', 404);
   if (r === false) return erro(res, 'Este período não está pago.', 409);
   res.json(r);
-}));
+})));
 
 // ---------------- páginas ----------------
 // no-cache: o navegador sempre confere se há versão nova (evita admin.html antigo com admin.js novo)

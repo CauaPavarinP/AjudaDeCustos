@@ -797,7 +797,7 @@ const antesDoSistema = p => /antes do sistema/.test(p.pagoPor || ''); // marcado
 const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
 // Despesa aprovada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
-const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.avaliadoEm && !!D.inicioPeriodos && d.avaliadoEm < D.inicioPeriodos;
+const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.criadoEm && !!D.inicioPeriodos && d.criadoEm < D.inicioPeriodos; // mesma regra do servidor (data de lançamento)
 const naoEnviadas = colabId => D.despesas.filter(d => !d.periodoId && d.status !== 'Recusada' && !antiga(d) && (!colabId || d.colaboradorId === colabId));
 // Card do topo de Pagamentos: despesas antigas por colaborador, para o Maurício decidir o que fazer com elas
 function blocoAntigas() {
@@ -891,7 +891,9 @@ function telaPagamentos() {
   });
   document.querySelectorAll('[data-despagar]').forEach(b => b.onclick = async () => {
     const p = acha(b.dataset.despagar);
-    if (!(await confirmar(`O período ${rotPeriodo(p)} de ${p.colaborador} volta para "Aguardando pagamento".`, { titulo: 'Desfazer pagamento?', ok: 'Desfazer', perigo: true }))) return;
+    const msg = antesDoSistema(p) ? `As despesas do período ${rotPeriodo(p)} de ${p.colaborador} voltam para a caixa "Despesas aprovadas antes do controle de pagamentos", para você decidir de novo.`
+      : `O período ${rotPeriodo(p)} de ${p.colaborador} volta para "Aguardando pagamento".`;
+    if (!(await confirmar(msg, { titulo: 'Desfazer pagamento?', ok: 'Desfazer', perigo: true }))) return;
     acao('/api/admin/periodos/' + encodeURIComponent(p.id) + '/desfazer-pagamento')();
   });
   document.querySelectorAll('[data-reabrir]').forEach(b => b.onclick = async () => {

@@ -102,8 +102,7 @@ function criarStoreMemoria() {
       const i = dados[t].findIndex(x => x.id === id);
       if (i < 0) return false;
       if (se && !se(copia(dados[t][i]))) return 'conflito';
-      dados[t].splice(i, 1);
-      return true;
+      return copia(dados[t].splice(i, 1)[0]); // devolve a linha apagada (como estava na hora)
     },
   };
 }
@@ -186,10 +185,11 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     remove: (t, id, se) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return false;
-      if (se && !se(deLinha(t, row.toObject()))) return 'conflito';
+      const apagada = deLinha(t, row.toObject());
+      if (se && !se(apagada)) return 'conflito';
       await row.delete();
       limpar(t);
-      return true;
+      return apagada; // devolve a linha apagada (como estava na hora)
     }),
   };
 }
