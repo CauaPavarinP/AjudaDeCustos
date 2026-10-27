@@ -19,7 +19,9 @@ const paga = d => d.status === 'Aprovada' && d.periodo && d.periodo.status === '
 const statusVisto = d => (paga(d) ? 'Paga' : d.status);
 const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 // "18/10 a 27/10" (com o ano nas duas pontas quando o intervalo vira o ano: "28/12/2026 a 05/01/2027")
-const faixa = (a, b) => (a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dm(b)}` : `${dmy(a)} a ${dmy(b)}`);
+// Um dia só: "11/10" (em vez de "11/10 a 11/10")
+const faixa = (a, b) => (a === b ? dm(a) : a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dm(b)}` : `${dmy(a)} a ${dmy(b)}`);
+let semConexaoNaTela = false; // aviso "sem conexão" visível: a atualização automática redesenha quando a rede voltar
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
@@ -130,6 +132,7 @@ async function telaInicio(recebidas) {
     try { despesas = await api('/api/despesas'); }
     catch (e) { if (!e.rede) throw e; semConexao = true; } // sem internet: mostra a última lista carregada
   }
+  semConexaoNaTela = semConexao;
   if (!me) return; // saiu (botão Sair) enquanto a lista carregava
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
@@ -267,10 +270,11 @@ async function fecharPeriodo() {
   try {
     // Busca a lista atualizada antes de confirmar (o Maurício pode ter recusado alguma nota há pouco)
     try { despesas = await api('/api/despesas'); } catch (e) { return avisar(e.message, 'Não foi possível enviar'); }
+    await telaInicio(despesas); // a tela já mostra o que mudou (ex.: nota recusada), mesmo se a pessoa cancelar
     const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
     if (!pend.length) { await telaInicio(despesas); return avisar('Não há despesas novas para enviar.', 'Nada para enviar'); }
     const datas = pend.map(d => d.data).sort();
-    const ok = await confirmar(`${pend.length === 1 ? 'A despesa' : `As ${pend.length} despesas`} de ${faixa(datas[0], datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) vão para o Maurício como um período de pagamento.\n\nDepois disso elas não podem mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
+    const ok = await confirmar(`${pend.length === 1 ? 'A despesa' : `As ${pend.length} despesas`} de ${faixa(datas[0], datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) ${pend.length === 1 ? 'vai' : 'vão'} para o Maurício como um período de pagamento.\n\nDepois disso ${pend.length === 1 ? 'ela não pode' : 'elas não podem'} mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
       { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
     if (!ok) return;
     let r;
@@ -387,7 +391,7 @@ async function atualizarSozinho() {
   try {
     const novas = await api('/api/despesas');
     if (versaoNova) return location.reload();
-    if (JSON.stringify(novas) === JSON.stringify(despesas)) return;
+    if (JSON.stringify(novas) === JSON.stringify(despesas) && !semConexaoNaTela) return;
     const y = window.scrollY;
     if (telaAtual === 'inicio') await telaInicio(novas);
     else if (telaAtual === 'detalhe') {

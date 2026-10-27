@@ -104,6 +104,9 @@ tr.off td { color: var(--muted); }
 .pend h3 { margin: 0; font-size: 14px; }
 .pend-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
 .pend-row .acts { display: flex; gap: 6px; }
+/* Pagamentos: despesas antigas (nome, valor, botões); no celular os botões vão para baixo */
+.antigas-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.6fr) auto; }
+@media (max-width: 760px) { .antigas-row { grid-template-columns: minmax(0, 1fr) auto !important; } .antigas-row .acts { grid-column: 1 / -1; } }
 .pend-row > span { min-width: 0; overflow-wrap: anywhere; } /* texto longo sem espaço não empurra a tela */
 /* observação longa: mostra até 3 linhas (o texto inteiro aparece ao passar o mouse e no "Ver nota") */
 .obs-txt { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }

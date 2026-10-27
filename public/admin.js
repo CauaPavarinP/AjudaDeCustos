@@ -265,7 +265,8 @@ function ligarCelulas(filtro, titulo, subtitulo) {
 }
 
 // Analisar uma despesa do celular: foto da nota (clique para ampliar) ao lado dos dados, com Aprovar/Recusar
-function modalNota(d, voltar) {
+// voltaDepois: depois de aprovar/recusar, volta para a lista de origem (só quando ela se recalcula com os dados novos)
+function modalNota(d, voltar, voltaDepois = false) {
   if (!d) return;
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '—');
   const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto' + (d.fotoV ? '?v=' + d.fotoV : ''); // ?v muda quando a foto é trocada
@@ -312,7 +313,7 @@ function modalNota(d, voltar) {
     if (acao === 'reabrir' && !(await confirmarDesfazer(d))) return;
     botao.disabled = true;
     // Aberta a partir de outra lista (ex.: "Ver notas" do período): volta para ela, sem fechar tudo
-    try { await avaliarDespesa(d.id, acao); desenharTela(); if (voltar) voltar(); else fecharModal(); }
+    try { await avaliarDespesa(d.id, acao); desenharTela(); if (voltar && voltaDepois) voltar(); else fecharModal(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
@@ -792,6 +793,7 @@ function pdfFolhas(colab, folhas, nomeArquivo) {
 // Status: Enviado (aguardando pagamento) → Pago. Pagar só depois de analisar todas as notas do período.
 const notasDo = p => D.despesas.filter(d => d.periodoId === p.id).sort((a, b) => a.data.localeCompare(b.data));
 const somaAprov = l => r2(l.filter(d => d.status === 'Aprovada').reduce((s, d) => s + d.valor, 0));
+const antesDoSistema = p => /antes do sistema/.test(p.pagoPor || ''); // marcado como "Já foram pagas" (pago fora do sistema)
 const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
 // Despesa aprovada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
@@ -804,7 +806,7 @@ function blocoAntigas() {
   if (!por.size) return '';
   return `<div class="card pend"><h3>Despesas aprovadas antes do controle de pagamentos</h3>
     <span class="muted small">Elas não entram sozinhas em nenhum período, porque podem já ter sido reembolsadas antes de o sistema controlar os pagamentos. Decida por colaborador:</span>
-    ${[...por].map(([id, l]) => { const ds = l.map(d => d.data).sort(), nome = (D.colaboradores.find(c => c.id === id) || l[0]).nome || l[0].colaborador; return `<div class="pend-row" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) auto">
+    ${[...por].map(([id, l]) => { const ds = l.map(d => d.data).sort(), nome = (D.colaboradores.find(c => c.id === id) || l[0]).nome || l[0].colaborador; return `<div class="pend-row antigas-row">
       <span><b>${esc(nome)}</b><br><span class="muted small">${l.length} despesa${l.length === 1 ? '' : 's'} · ${dm(ds[0])} a ${dmy(ds[ds.length - 1])}</span></span>
       <span class="num"><b>${brl(l.reduce((s, d) => s + d.valor, 0))}</b></span>
       <span class="acts"><button class="btn xs" data-ant-pagas="${esc(id)}">Já foram pagas</button><button class="btn xs ok" data-ant-incluir="${esc(id)}">Incluir para pagar</button></span></div>`; }).join('')}
@@ -817,7 +819,7 @@ function telaPagamentos() {
   const rows = doColab.filter(p => !f.status || (f.status === 'Pago' ? p.status === 'Pago' : p.status !== 'Pago'));
   const aguardando = doColab.filter(p => p.status !== 'Pago'); // Enviado (e os estados de passagem Pagando/Reabrindo)
   const mesAtual = hoje().slice(0, 7);
-  const pagosMes = doColab.filter(p => p.status === 'Pago' && diaBR(p.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
+  const pagosMes = doColab.filter(p => p.status === 'Pago' && !antesDoSistema(p) && diaBR(p.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
   const pend = naoEnviadas(f.colab);
   const chip = (st, rot, n) => `<button class="chip sm${f.status === st ? ' on' : ''}" data-st="${esc(st)}">${esc(rot)} (${n})</button>`;
   $('page').innerHTML = `
@@ -842,7 +844,7 @@ function telaPagamentos() {
         <td>${rotPeriodo(p)}<br><span class="muted small">enviado em ${diaBR(p.fechadoEm)}${p.fechadoPor && p.fechadoPor !== p.colaborador ? ' por ' + esc(p.fechadoPor) : ''}</span></td>
         <td>${notas.length}${anal ? `<br><span class="badge b-amber">${anal} em análise</span>` : ''}</td>
         <td class="num b">${fmt(p.status === 'Pago' ? p.valorPago : somaAprov(notas))}</td>
-        <td>${p.status === 'Pago' ? `<span class="badge b-blue">Pago em ${diaBR(p.pagoEm).slice(0, 5)}</span>${/antes do sistema/.test(p.pagoPor) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
+        <td>${p.status === 'Pago' ? `<span class="badge b-blue">Pago em ${diaBR(p.pagoEm).slice(0, 5)}</span>${antesDoSistema(p) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
           : p.status === 'Enviado' ? '<span class="badge b-amber">Aguardando pagamento</span>'
           : `<span class="badge b-gray">${p.status === 'Pagando' ? 'Pagamento em andamento' : 'Reabertura em andamento'}</span><br><span class="muted small">se ficar parado, use o botão ao lado</span>`}</td>
         <td><span class="chips">
@@ -907,7 +909,7 @@ function modalPeriodo(p) {
     <span class="muted small">${p.status === 'Pago' ? 'Período pago: clique numa nota para ver a foto.' : 'Clique numa nota para ver a foto e aprovar ou recusar.'}</span>
     <div class="acts"><button class="btn" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = () => { fecharModal(); telaPagamentos(); };
-  m.querySelectorAll('[data-nota]').forEach(el => el.onclick = () => modalNota(D.despesas.find(d => d.id === el.dataset.nota), () => modalPeriodo(D.periodos.find(x => x.id === p.id) || p)));
+  m.querySelectorAll('[data-nota]').forEach(el => el.onclick = () => modalNota(D.despesas.find(d => d.id === el.dataset.nota), () => modalPeriodo(D.periodos.find(x => x.id === p.id) || p), true));
 }
 function pdfPeriodo(p) {
   const colab = D.colaboradores.find(c => c.id === p.colaboradorId) || { nome: p.colaborador };
@@ -918,7 +920,7 @@ function pdfPeriodo(p) {
   for (const d of aprov) { const k = chaveCat(d.categoria); v[k] = r2(v[k] + d.valor); }
   pdfFolhas(colab, [{
     periodo: rotPeriodo(p), s: { v, total: somaAprov(notas) },
-    carimbo: p.status === 'Pago' ? `PAGO EM ${diaBR(p.pagoEm)}` : '',
+    carimbo: p.status !== 'Pago' ? '' : antesDoSistema(p) ? 'PAGO ANTES DO SISTEMA' : `PAGO EM ${diaBR(p.pagoEm)}`,
     nota: anal ? `Atenção: ${anal} despesa${anal > 1 ? 's' : ''} deste período ainda em análise não entr${anal > 1 ? 'aram' : 'ou'} nos valores.` : '',
   }], `prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${p.dataInicial.slice(8)}-${p.dataInicial.slice(5, 7)}-a-${p.dataFinal.slice(8)}-${p.dataFinal.slice(5, 7)}-${p.dataFinal.slice(0, 4)}`);
 }
