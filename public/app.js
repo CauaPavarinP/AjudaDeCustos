@@ -170,13 +170,14 @@ async function telaInicio(recebidas) {
     <button class="fab" id="i-fab" aria-label="Nova despesa">+</button>`, 'inicio');
   $('i-mes').onchange = e => { mesSel = e.target.value; telaInicio(); };
   if ($('i-todas')) $('i-todas').onclick = () => { mesSel = 'todas'; telaInicio(); };
-  $('i-fab').onclick = telaNova;
+  $('i-fab').onclick = () => telaNova();
   document.querySelectorAll('#i-lista .item').forEach(b => b.onclick = () => telaDetalhe(despesas.find(d => d.id === b.dataset.id)));
 }
 
 // ---------- C3 · Nova despesa ----------
 function telaNova(r = null) {
   telaAtual = 'nova';
+  if (!r || !r.usuario) r = null; // só um rascunho de verdade (nunca o evento de clique de um botão)
   let cat = '', centavos = 0, foto = r ? r.foto : '';
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
@@ -259,7 +260,7 @@ function telaEnviada() {
       <button class="btn lg block secondary" id="o-outra">Lançar outra despesa</button>
     </div>`, 'nova');
   $('o-ver').onclick = () => { mesSel = d.data.slice(0, 7); telaInicio(); };
-  $('o-outra').onclick = telaNova;
+  $('o-outra').onclick = () => telaNova();
 }
 
 // ---------- C5 · Detalhe da despesa ----------
