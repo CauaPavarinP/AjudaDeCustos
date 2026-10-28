@@ -1,6 +1,7 @@
-// Armazenamento dos dados.
-// Produção: Google Sheets (uma aba por tabela, criada automaticamente).
-// Desenvolvimento sem credenciais: memória (os dados somem ao reiniciar).
+// Armazenamento dos dados. Escolhido pelas variáveis de ambiente, nesta ordem:
+// - DATABASE_URL: banco PostgreSQL (ex.: Supabase), uma tabela por "aba", criadas automaticamente;
+// - SPREADSHEET_ID + credenciais do Google: Google Sheets (uma aba por tabela, criada automaticamente);
+// - nenhum dos dois (desenvolvimento): memória (os dados somem ao reiniciar).
 
 const crypto = require('crypto');
 
@@ -108,7 +109,7 @@ function criarStoreMemoria() {
 }
 
 // ---------------- Google Sheets ----------------
-function criarStoreSheets({ spreadsheetId, email, privateKey }) {
+function criarStoreSheets({ spreadsheetId, email, privateKey, somenteLeitura = false }) {
   const { GoogleSpreadsheet } = require('google-spreadsheet');
   const { JWT } = require('google-auth-library');
   const auth = new JWT({ email, key: privateKey, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
@@ -139,7 +140,9 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     const c = cache[t];
     if (c && Date.now() - c.t < CACHE_MS) return c.rows;
     const v = versao[t] || 0;
-    const rows = await doc.sheetsByTitle[t].getRows();
+    const aba = doc.sheetsByTitle[t];
+    if (!aba) return []; // só no modo somente leitura (senão o init já criou a aba)
+    const rows = await aba.getRows();
     if ((versao[t] || 0) === v) cache[t] = { t: Date.now(), rows };
     return rows;
   }
@@ -158,6 +161,7 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
     modo: 'sheets',
     async init() {
       await doc.loadInfo();
+      if (somenteLeitura) return;
       for (const t of Object.keys(TABELAS)) await prepararAba(t);
     },
     // { fresco: true }: ignora o cache (para decisões que não podem usar dado de até 5 s atrás)
@@ -194,7 +198,104 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   };
 }
 
+// ---------------- PostgreSQL (ex.: Supabase) ----------------
+// Cada tabela do sistema vira uma tabela no schema DATABASE_SCHEMA (padrão "ajuda"). O schema separado e o RLS
+// ligado sem nenhuma regra deixam as tabelas FECHADAS para a API pública do Supabase (que expõe o schema
+// "public"): só o servidor, conectado como dono do banco, lê e grava (há CPF e dados bancários).
+// As colunas têm o mesmo nome usado no código (ex.: "colaboradorId"); "_ordem" guarda a ordem de inclusão,
+// como as linhas da planilha.
+function criarStoreBanco({ url, schema = 'ajuda', ca = '' }) {
+  const { Pool } = require('pg');
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(schema)) throw new Error('DATABASE_SCHEMA inválido: use letras minúsculas, números e _.');
+  // Certificado do banco (Supabase: Database Settings > SSL Configuration): conexão criptografada E conferida.
+  // Pode ser o caminho do arquivo .crt ou o próprio texto do certificado.
+  const ssl = ca ? { ca: ca.includes('BEGIN CERTIFICATE') ? ca.replace(/\\n/g, '\n') : require('fs').readFileSync(ca, 'utf8') } : undefined;
+  const pool = new Pool({ connectionString: url, ssl, max: 4 }); // o pooler gratuito aceita poucas conexões
+  pool.on('error', err => console.error('[banco] conexão perdida:', err.message)); // o pool reconecta sozinho
+
+  const nome = t => `"${schema}"."${t}"`;
+  const col = c => `"${c}"`;
+  const tipo = (t, k) => (TABELAS[t].num && TABELAS[t].num.includes(k) ? 'numeric(14,2)'
+    : TABELAS[t].bool && TABELAS[t].bool.includes(k) ? 'boolean' : 'text');
+  const chaves = t => TABELAS[t].cols.map(c => c[0]);
+  function deBanco(t, linha) {
+    const r = {};
+    for (const k of chaves(t)) {
+      const v = linha[k], ti = tipo(t, k);
+      r[k] = ti === 'boolean' ? !!v : ti === 'text' ? String(v ?? '') : Math.round(Number(v || 0) * 100) / 100;
+    }
+    return r;
+  }
+  // Só as colunas conhecidas, no tipo certo
+  function paraBanco(t, obj) {
+    const r = {};
+    for (const k of chaves(t)) {
+      if (!(k in obj)) continue;
+      const ti = tipo(t, k);
+      r[k] = ti === 'boolean' ? !!obj[k] : ti === 'text' ? String(obj[k] ?? '') : Number(obj[k]) || 0;
+    }
+    return r;
+  }
+  // Roda fn(cliente) numa transação; a linha lida com FOR UPDATE fica travada até o fim
+  async function transacao(fn) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      const r = await fn(c);
+      await c.query('COMMIT');
+      return r;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { c.release(); }
+  }
+  const lerTravada = async (c, t, id) => (await c.query(`SELECT * FROM ${nome(t)} WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+
+  return {
+    modo: 'banco',
+    pool, // usado pelo script de migração
+    async init() {
+      await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+      for (const t of Object.keys(TABELAS)) {
+        await pool.query(`CREATE TABLE IF NOT EXISTS ${nome(t)} (id text PRIMARY KEY, "_ordem" bigserial)`);
+        // Coluna nova (versão nova do sistema) entra sozinha, como na planilha
+        for (const k of chaves(t)) if (k !== 'id') await pool.query(`ALTER TABLE ${nome(t)} ADD COLUMN IF NOT EXISTS ${col(k)} ${tipo(t, k)}`);
+        await pool.query(`ALTER TABLE ${nome(t)} ENABLE ROW LEVEL SECURITY`);
+      }
+    },
+    async list(t) {
+      return (await pool.query(`SELECT * FROM ${nome(t)} ORDER BY "_ordem"`)).rows.map(l => deBanco(t, l));
+    },
+    async add(t, obj) {
+      const v = paraBanco(t, obj), ks = Object.keys(v);
+      await pool.query(`INSERT INTO ${nome(t)} (${ks.map(col).join(', ')}) VALUES (${ks.map((_, i) => '$' + (i + 1)).join(', ')})`, ks.map(k => v[k]));
+      return obj;
+    },
+    // se(atual) opcional: só grava se a condição for verdadeira; senão devolve false (conflito)
+    update: (t, id, campos, se) => transacao(async c => {
+      const linha = await lerTravada(c, t, id);
+      if (!linha) return null;
+      const antes = deBanco(t, linha);
+      if (se && !se(antes)) return false;
+      const v = paraBanco(t, campos); delete v.id;
+      const ks = Object.keys(v);
+      if (ks.length) await c.query(`UPDATE ${nome(t)} SET ${ks.map((k, i) => `${col(k)} = $${i + 2}`).join(', ')} WHERE id = $1`, [id, ...ks.map(k => v[k])]);
+      return { ...antes, ...campos };
+    }),
+    // se(atual) opcional: só apaga se a condição for verdadeira (senão devolve 'conflito')
+    remove: (t, id, se) => transacao(async c => {
+      const linha = await lerTravada(c, t, id);
+      if (!linha) return false;
+      const apagada = deBanco(t, linha);
+      if (se && !se(apagada)) return 'conflito';
+      await c.query(`DELETE FROM ${nome(t)} WHERE id = $1`, [id]);
+      return apagada; // devolve a linha apagada (como estava na hora)
+    }),
+  };
+}
+
 function criarStore(env) {
+  if (env.DATABASE_URL) return criarStoreBanco({ url: env.DATABASE_URL, schema: env.DATABASE_SCHEMA || undefined, ca: env.DATABASE_SSL_CA || '' });
   const spreadsheetId = env.SPREADSHEET_ID;
   const email = env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const privateKey = (env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
@@ -206,4 +307,4 @@ function criarStore(env) {
   return criarStoreMemoria();
 }
 
-module.exports = { criarStore, novoId, paraNumero };
+module.exports = { criarStore, criarStoreSheets, criarStoreBanco, novoId, paraNumero, TABELAS };

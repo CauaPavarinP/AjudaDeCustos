@@ -57,7 +57,7 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 
 ## Futuro (quando o sistema crescer)
 
-- [ ] **Mudar para banco de dados (PostgreSQL).** Não é necessário hoje (10 colaboradores e 2 admins). Fazer quando acontecer algo destes:
+- [ ] **Mudar para banco de dados (PostgreSQL).** *Em teste na branch `claude/banco-de-dados` (Supabase); falta o Maurício decidir e fazer a migração em produção.* Não é necessário hoje (10 colaboradores e 2 admins). Fazer quando acontecer algo destes:
   - precisar de mais de um servidor no Render, porque as travas atuais só funcionam com um;
   - aparecerem erros de limite do Google Sheets nos logs;
   - o painel ficar lento;

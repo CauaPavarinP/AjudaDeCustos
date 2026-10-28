@@ -1,8 +1,12 @@
 // Testes automáticos do sistema. Rode com: npm test   (no Windows: npm.cmd test)
 //
-// Sobem o servidor numa porta separada, SEMPRE em memória: as variáveis do Google, do Cloudinary e de
-// produção são zeradas abaixo, então nada é gravado na planilha real nem no Cloudinary, mesmo que exista
-// um arquivo .env com as credenciais.
+// Sobem o servidor numa porta separada, em memória: as variáveis do Google, do banco, do Cloudinary e de
+// produção são zeradas abaixo, então nada é gravado na planilha real, no banco nem no Cloudinary, mesmo que
+// exista um arquivo .env com as credenciais.
+//
+// Para rodar os mesmos testes num banco PostgreSQL DE TESTE (nunca o de produção):
+//   TEST_DATABASE_URL=postgresql://... npm test
+// Cada servidor de teste usa um schema próprio (teste_a, teste_b), apagado e recriado no começo.
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -15,12 +19,24 @@ const PORTA = 3900 + Math.floor(Math.random() * 90);
 const B = `http://localhost:${PORTA}`;
 let servidor;
 
+// Banco de teste opcional: cada servidor recebe um schema limpo
+const BANCO_TESTE = process.env.TEST_DATABASE_URL || '';
+async function envBanco(schema) {
+  if (!BANCO_TESTE) return { DATABASE_URL: '', DATABASE_SCHEMA: '' };
+  const { Client } = require('pg');
+  const c = new Client({ connectionString: BANCO_TESTE });
+  await c.connect();
+  try { await c.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`); } finally { await c.end(); }
+  return { DATABASE_URL: BANCO_TESTE, DATABASE_SCHEMA: schema };
+}
+
 before(async () => {
   const env = {
     ...process.env, PORT: String(PORTA),
     // vazias de propósito: o dotenv não sobrescreve variáveis já definidas
     NODE_ENV: '', SPREADSHEET_ID: '', GOOGLE_SERVICE_ACCOUNT_EMAIL: '', GOOGLE_PRIVATE_KEY: '',
-    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '',
+    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '', DATABASE_SSL_CA: '',
+    ...(await envBanco('teste_a')),
   };
   servidor = spawn(process.execPath, [path.join(__dirname, '..', 'app.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   await new Promise((ok, falha) => {
@@ -93,7 +109,7 @@ test('foto: só aceita JPEG válido', () => {
 // ---------------- servidor ----------------
 test('health e versão', async () => {
   const r = await cliente().get('/health');
-  assert.equal(r.dados.armazenamento, 'memoria');
+  assert.equal(r.dados.armazenamento, BANCO_TESTE ? 'banco' : 'memoria');
   assert.ok(r.headers.get('x-versao'));
 });
 
@@ -193,7 +209,8 @@ test('pagamentos: aprovar e pagar ao mesmo tempo não deixam nota em análise de
 test('pagamentos: despesas lançadas antes do controle não entram sozinhas; o Maurício decide', async () => {
   const porta = PORTA + 100, b2 = `http://localhost:${porta}`;
   const env = { ...process.env, PORT: String(porta), NODE_ENV: '', SPREADSHEET_ID: '', GOOGLE_SERVICE_ACCOUNT_EMAIL: '', GOOGLE_PRIVATE_KEY: '',
-    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '', INICIO_PERIODOS: '2999-01-01T00:00:00.000Z' };
+    CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '', INICIO_PERIODOS: '2999-01-01T00:00:00.000Z',
+    DATABASE_SSL_CA: '', ...(await envBanco('teste_b')) };
   const srv = spawn(process.execPath, [path.join(__dirname, '..', 'app.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     await new Promise((ok, falha) => { const t = setTimeout(() => falha(new Error('não subiu')), 10000); srv.stdout.on('data', x => { if (String(x).includes('rodando')) { clearTimeout(t); ok(); } }); });

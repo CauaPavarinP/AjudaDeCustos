@@ -7,7 +7,7 @@ module.exports = [
   js.configs.recommended,
   {
     // Servidor e testes (Node)
-    files: ['*.js', 'services/**/*.js', 'test/**/*.js'],
+    files: ['*.js', 'services/**/*.js', 'scripts/**/*.js', 'test/**/*.js'],
     languageOptions: { ecmaVersion: 2024, sourceType: 'commonjs', globals: globals.node },
   },
   {

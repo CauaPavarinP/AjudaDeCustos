@@ -37,6 +37,38 @@ Crie uma planilha nova e compartilhe com o e-mail da Service Account como **Edit
 
 Sem as variáveis do Google, e fora de produção, o sistema roda com os dados **em memória**, só para testes locais. Os dados somem ao reiniciar. Nesse modo, o login do painel é `admin` / `admin`.
 
+## Banco de dados PostgreSQL (opcional, em teste)
+
+Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, por exemplo no plano gratuito do [Supabase](https://supabase.com). Ele só usa o banco se existir a variável `DATABASE_URL`; sem ela, continua com a planilha. O código está todo em `services/store.js`, e o resto do sistema não muda. As fotos continuam no Cloudinary.
+
+**Testar no seu computador com o Supabase:**
+
+1. No Supabase, abra o projeto e clique em **Connect → Direct → Session pooler**. Copie o endereço que começa com `postgresql://`.
+2. No `.env`, adicione uma linha com o endereço, trocando `[YOUR-PASSWORD]` pela senha do banco (sem os colchetes):
+   ```
+   DATABASE_URL=postgresql://postgres.ID-DO-PROJETO:SENHA@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+   ```
+   Se a senha tiver `@ # / : % ?`, troque-a por uma só com letras e números (Project Settings → Database → Reset database password).
+3. Rode `npm.cmd install` e depois `npm.cmd run dev`. No terminal deve aparecer `armazenamento: banco`.
+4. Na primeira vez, o sistema cria sozinho o schema `ajuda` com as tabelas, que você vê no Supabase em **Table Editor**, escolhendo o schema `ajuda`. Também cria as funções iniciais. O banco começa vazio.
+
+**Segurança:**
+- As tabelas ficam no schema `ajuda`, que não é publicado pela API do Supabase.
+- As tabelas têm o RLS (proteção por linha) ligado sem nenhuma regra, então ninguém lê pela internet. Só o servidor acessa, pela conexão direta.
+- **Nunca** crie regras (policies) nem mova as tabelas para o schema `public`: há CPF e dados bancários.
+- Para criptografar e conferir a conexão, baixe o certificado em **Database Settings → SSL Configuration** e aponte `DATABASE_SSL_CA` para o arquivo.
+
+**Copiar os dados da planilha para o banco** (precisa das variáveis do Google **e** do `DATABASE_URL` no `.env`):
+
+```bash
+node scripts/migrar-planilha-para-banco.js                 # só copia se o banco estiver vazio
+node scripts/migrar-planilha-para-banco.js --apagar-antes  # apaga o que estiver no banco e copia de novo
+```
+
+A planilha só é **lida**: nada nela é criado, alterado ou apagado. No fim, o script confere se a quantidade de linhas de cada tabela bateu.
+
+**Atenção:** com o `DATABASE_URL` no `.env`, o que você fizer localmente grava nesse banco. Use um projeto do Supabase de teste, e não o de produção. Os testes automáticos (`npm test`) continuam em memória. Para rodá-los num banco **de teste**, use `TEST_DATABASE_URL=... npm test`, que apaga e recria os schemas `teste_a` e `teste_b`.
+
 ## Variáveis de ambiente
 
 Veja `.env.example`. No Render, cadastre em **Environment → Environment Variables**:
@@ -123,7 +155,8 @@ Sobem o servidor numa porta separada, **sempre em memória** (ignoram o `.env`: 
 
 ```
 app.js              servidor Express: login, APIs do colaborador e do painel, aprovação
-services/store.js   leitura e gravação no Google Sheets (ou memória em testes)
+services/store.js   leitura e gravação no Google Sheets, no PostgreSQL (DATABASE_URL) ou em memória (testes)
+scripts/migrar-planilha-para-banco.js   copia os dados da planilha para o banco
 services/fotos.js   fotos das notas no Cloudinary (ou memória em testes)
 public/index.html   app do colaborador (celular)
 public/app.js
