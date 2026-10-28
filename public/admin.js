@@ -215,7 +215,7 @@ function telaLancamentos() {
 function modalDespesasApp(r) {
   const m = abrirModal(`<h3>${esc(r.colaborador)} · despesas do app</h3>
     <p class="muted small" style="margin:0">${nomeMes(r.mesRef)} · somente despesas aprovadas</p>
-    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}${d.foto ? ` <button class="link tag-foto" data-nota="${esc(d.id)}">📷 ver nota</button>` : ''}</span><span class="valor">${brl(d.valor)}</span></div>`).join('')}</div>
+    <div class="rows card">${r.despesas.sort((a, b) => a.data.localeCompare(b.data)).map(d => `<div><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${seloPaga(d)}${d.observacao ? ' · ' + esc(d.observacao) : ''}${d.foto ? ` <button class="link tag-foto" data-nota="${esc(d.id)}">📷 ver nota</button>` : ''}</span><span class="valor">${brl(d.valor)}</span></div>`).join('')}</div>
     <div class="acts"><button class="btn secondary" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = fecharModal;
   m.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => modalNota(D.despesas.find(d => d.id === b.dataset.nota), () => modalDespesasApp(r)));
@@ -238,7 +238,7 @@ function modalDetalhe(titulo, sub, rows, chaves) {
   }).filter(s => s.itens.length);
   const total = r2(secoes.reduce((s, x) => s + x.total, 0));
   const linha = i => i.app
-    ? `<div><span class="desc">${dmy(i.data)} · ${esc(i.app.observacao || i.app.categoria)}${i.app.foto ? ` <button class="link tag-foto" data-nota="${esc(i.app.id)}">📷 ver nota</button>` : ''}<br><span class="muted small">Despesa do celular</span></span><span class="valor">${brl(i.valor)}</span></div>`
+    ? `<div><span class="desc">${dmy(i.data)} · ${esc(i.app.observacao || i.app.categoria)}${seloPaga(i.app)}${i.app.foto ? ` <button class="link tag-foto" data-nota="${esc(i.app.id)}">📷 ver nota</button>` : ''}<br><span class="muted small">Despesa do celular</span></span><span class="valor">${brl(i.valor)}</span></div>`
     : `<div><span class="desc">${dm(i.prest.dataInicial)}${i.prest.dataInicial.slice(0, 4) !== i.prest.dataFinal.slice(0, 4) ? '/' + i.prest.dataInicial.slice(0, 4) : ''} a ${dmy(i.prest.dataFinal)}${i.prest.observacao ? ' · ' + esc(i.prest.observacao) : ''}${i.prest.fotos ? ` <span class="tag-foto">📎${i.prest.fotos}</span>` : ''} <button class="link tag-foto" data-prest="${esc(i.prest.id)}">abrir</button><br><span class="muted small">Prestação do painel · mês ref. ${nomeMes(i.prest.mesRef)}</span></span><span class="valor">${brl(i.valor)}</span></div>`;
   const reabrir = () => modalDetalhe(titulo, sub, rows, chaves);
   const m = abrirModal(`<h3>${esc(titulo)}</h3>
@@ -360,6 +360,8 @@ const STATUS_COR = { 'Em análise': 'b-amber', Aprovada: 'b-green', Recusada: 'b
 const periodoDaDespesa = d => d.periodoId && (D.periodos || []).find(p => p.id === d.periodoId);
 const periodoTravado = d => !!periodoDaDespesa(d); // despesa paga (ligada a um pagamento): não muda mais
 // Status como aparece nas telas e no Excel: "Paga" quando o período foi pago
+// Selo "Paga em dd/mm" ao lado da despesa (listas de despesas do app)
+const seloPaga = d => { const p = periodoDaDespesa(d); return p ? ` <span class="badge b-blue">Paga em ${diaBR(p.pagoEm).slice(0, 5)}</span>` : ''; };
 const statusVisto = d => (d.status === 'Aprovada' && (periodoDaDespesa(d) || {}).status === 'Pago' ? 'Paga' : d.status);
 function telaDespesas() {
   const f = F.d;
