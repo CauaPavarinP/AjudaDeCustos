@@ -857,7 +857,7 @@ function telaPagamentos() {
         return `<tr>
         <td class="b">${esc(l.colaborador)}</td>
         <td>${rotPeriodo(l)}${pago && !antesDoSistema(l) && (D.periodos || []).some(o => o.id !== l.id && o.colaboradorId === l.colaboradorId && o.dataInicial === l.dataInicial) ? '<br><span class="muted small">pagamento separado (nota lançada depois)</span>' : ''}</td>
-        <td>${l.notas.length}${na ? `<br><span class="badge b-amber">${na} em análise</span>` : ''}</td>
+        <td style="white-space:nowrap">${l.notas.length}${na ? ` <span class="badge b-amber">${na} em análise</span>` : ''}</td>
         <td class="num b">${fmt(pago ? l.valorPago : somaAprov(l.notas))}</td>
         <td>${pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}` : '<span class="badge b-amber">Aguardando pagamento</span>'}</td>
         <td><span class="chips">
