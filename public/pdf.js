@@ -5,7 +5,8 @@
 // Uso:
 //   const doc = novoPdf();            // folha A4 em pé; medidas em pontos (1 cm ≈ 28,35 pt), origem no canto de cima
 //   doc.pagina();
-//   doc.texto(60, 90, 'Olá', { tam: 12, negrito: true, alinhar: 'esq' | 'centro' | 'dir', cor: [0, 0, 0] });
+//   doc.texto(60, 90, 'Olá', { tam: 12, negrito: true, italico: true, alinhar: 'esq' | 'centro' | 'dir', cor: [0, 0, 0] });
+//     (italico só junto com negrito: Helvetica-BoldOblique, mesma largura do negrito)
 //   doc.linha(60, 100, 300, 100, { larg: 0.8 });
 //   doc.ret(60, 110, 200, 30, { fundo: [0.75, 0.75, 0.75], borda: true });
 //   doc.largura('texto', 12, false)   // largura do texto em pontos (para centralizar ou cortar)
@@ -47,7 +48,7 @@
         const w = largura(s, tam, o.negrito);
         const x0 = o.alinhar === 'centro' ? x - w / 2 : o.alinhar === 'dir' ? x - w : x;
         const bytes = [...s].map(ch => { const c = codigo(ch); return c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : String.fromCharCode(c); }).join('');
-        atual.push(`BT ${cor(o.cor)} rg /${o.negrito ? 'F2' : 'F1'} ${num(tam)} Tf ${num(x0)} ${num(y(yy))} Td (${bytes}) Tj ET`);
+        atual.push(`BT ${cor(o.cor)} rg /${o.negrito ? (o.italico ? 'F3' : 'F2') : 'F1'} ${num(tam)} Tf ${num(x0)} ${num(y(yy))} Td (${bytes}) Tj ET`);
         return doc;
       },
       linha(x1, y1, x2, y2, o = {}) {
@@ -73,10 +74,11 @@
         const catalogo = add(''), pags = add('');
         const f1 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
         const f2 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+        const f3 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique /Encoding /WinAnsiEncoding >>');
         const filhos = paginas.map(cmds => {
           const conteudo = cmds.join('\n');
           const c = add(`<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`);
-          return add(`<< /Type /Page /Parent ${pags} 0 R /MediaBox [0 0 ${A4.larg} ${A4.alt}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${c} 0 R >>`);
+          return add(`<< /Type /Page /Parent ${pags} 0 R /MediaBox [0 0 ${A4.larg} ${A4.alt}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R /F3 ${f3} 0 R >> >> /Contents ${c} 0 R >>`);
         });
         objs[catalogo - 1] = `<< /Type /Catalog /Pages ${pags} 0 R >>`;
         objs[pags - 1] = `<< /Type /Pages /Kids [${filhos.map(n => n + ' 0 R').join(' ')}] /Count ${filhos.length} >>`;

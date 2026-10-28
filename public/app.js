@@ -1,4 +1,5 @@
 // App do colaborador (celular): login, minhas despesas, nova despesa, detalhe e perfil
+const { STATUS, PAGO, PAGA, ABERTA, ANTERIOR } = Regras;
 const $ = id => document.getElementById(id);
 const tela = () => $('screen');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -13,9 +14,20 @@ const VISUAL = {
   'Hotel': ['🏨', '#f3e8ff'], 'Transporte': ['🚌', '#e0f2fe'], 'Outros': ['🧾', '#fef3c7'],
 };
 const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; return `<span class="ic" style="background:${bg}">${e}</span>`; };
-const badge = st => `<span class="badge ${st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
+const COR_STATUS = { [PAGA]: 'b-blue', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red' };
+const badge = st => `<span class="badge ${COR_STATUS[st] || 'b-amber'}">${esc(st)}</span>`;
+// Período de pagamento em que a despesa foi enviada (vem do servidor em d.periodo)
+const paga = d => d.status === STATUS.aprovada && d.periodo && d.periodo.status === PAGO;
+const statusVisto = d => (paga(d) ? PAGA : d.status);
+const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+// "18/10 a 27/10" (com o ano nas duas pontas quando o intervalo vira o ano: "28/12/2026 a 05/01/2027")
+// Um dia só: "11/10" (em vez de "11/10 a 11/10")
+const faixa = (a, b) => (a === b ? dm(a) : a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dm(b)}` : `${dmy(a)} a ${dmy(b)}`);
+let semConexaoNaTela = false; // aviso "sem conexão" visível: a atualização automática redesenha quando a rede voltar
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
+// Despesa que estava sendo enviada quando a sessão expirou: volta preenchida depois do login (mesmo usuário)
+let rascunho = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
 // d.fotoV vem do servidor e muda quando a foto é trocada (aqui ou em outro aparelho): vai no endereço da
 // imagem para o navegador não mostrar a foto antiga guardada em cache
@@ -26,8 +38,8 @@ const instalado = () => window.matchMedia('(display-mode: standalone)').matches 
 
 // ---------- foto da nota ----------
 // Botões "Tirar foto" (câmera) e "Galeria", com prévia, Trocar e Remover. Chama aoMudar(dataUrl | '').
-function seletorFoto(caixa, aoMudar, idErro) {
-  let atual = '';
+function seletorFoto(caixa, aoMudar, idErro, inicial = '') {
+  let atual = inicial;
   const desenha = () => {
     caixa.innerHTML = atual
       ? `<div class="foto-prev"><img src="${atual}" alt="Foto da nota"></div>
@@ -59,13 +71,19 @@ function notaVersao(r) {
   if (!versaoAberta) versaoAberta = v; else if (v !== versaoAberta) versaoNova = true;
 }
 
+const MSG_REDE = 'Sem conexão com a internet. Confira o sinal e tente de novo.';
 async function api(url, opts = {}) {
-  const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
+  let r;
+  // sem isso, sem internet o navegador mostraria só "Failed to fetch", em inglês
+  try { r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts }); }
+  catch { throw Object.assign(new Error(MSG_REDE), { rede: true }); }
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
   if (r.status === 401 && !url.endsWith('/api/login')) {
+    const estavaLogado = !!me;
     telaLogin();
     if (corpo.erro && corpo.erro !== 'Faça login.') erro('l-erro', corpo.erro); // ex.: "Sua senha foi alterada"
+    else if (estavaLogado) erro('l-erro', 'Sua sessão expirou. Entre de novo.');
     throw Object.assign(new Error(corpo.erro || 'Faça login.'), { login: true });
   }
   if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão. Tente novamente.');
@@ -80,7 +98,7 @@ function mostrar(html, aba) {
   document.querySelectorAll('#tabbar button').forEach(b => b.classList.toggle('on', b.dataset.tab === aba));
   window.scrollTo(0, 0);
 }
-function erro(id, msg) { const el = $(id); el.textContent = msg; el.classList.toggle('hidden', !msg); }
+function erro(id, msg) { const el = $(id); if (!el) return; el.textContent = msg; el.classList.toggle('hidden', !msg); }
 document.querySelectorAll('#tabbar button').forEach(b => b.addEventListener('click', () => ({ inicio: telaInicio, nova: telaNova, perfil: telaPerfil }[b.dataset.tab])()));
 
 // ---------- C1 · Login ----------
@@ -114,14 +132,21 @@ function telaLogin() {
 // ---------- C2 · Minhas despesas ----------
 // "recebidas" vem preenchida só pela atualização automática (os botões chamam sem argumento)
 async function telaInicio(recebidas) {
-  despesas = Array.isArray(recebidas) ? recebidas : await api('/api/despesas');
+  let semConexao = false;
+  if (Array.isArray(recebidas)) despesas = recebidas;
+  else {
+    try { despesas = await api('/api/despesas'); }
+    catch (e) { if (!e.rede) throw e; semConexao = true; } // sem internet: mostra a última lista carregada
+  }
+  semConexaoNaTela = semConexao;
   if (!me) return; // saiu (botão Sair) enquanto a lista carregava
   telaAtual = 'inicio';
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   if (mesSel !== 'todas' && !meses.includes(mesSel)) mesSel = hoje().slice(0, 7); // título e seletor sempre no mesmo mês
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
-  const total = lista.filter(d => d.status !== 'Recusada').reduce((s, d) => s + d.valor, 0); // recusadas não contam
-  const aprov = lista.filter(d => d.status === 'Aprovada').length, anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
+  const total = lista.filter(d => d.status !== STATUS.recusada).reduce((s, d) => s + d.valor, 0); // recusadas não contam
+  const pagas = lista.filter(paga).length, aprov = lista.filter(d => d.status === STATUS.aprovada).length - pagas;
+  const anal = lista.filter(d => d.status === STATUS.analise).length, rec = lista.filter(d => d.status === STATUS.recusada).length;
   const nomeMes = ym => MESES[Number(ym.slice(5)) - 1] + '/' + ym.slice(0, 4);
   mostrar(`
     <div class="m-head">
@@ -131,14 +156,17 @@ async function telaInicio(recebidas) {
     <div class="hero">
       <span class="l">${mesSel === 'todas' ? 'Total geral' : 'Total no mês'}${rec ? ' (sem as recusadas)' : ''}</span>
       <span class="v">${brl(total)}</span>
-      <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
+      <span class="d">${lista.length} despesa${lista.length === 1 ? '' : 's'} · ${aprov} aprovada${aprov === 1 ? '' : 's'} · ${anal} em análise${pagas ? ` · ${pagas} paga${pagas === 1 ? '' : 's'}` : ''}${rec ? ` · ${rec} recusada${rec === 1 ? '' : 's'}` : ''}</span>
     </div>
+    ${semConexao ? `<div class="alert">${MSG_REDE} Mostrando a última lista carregada.</div>` : ''}
+    ${cardPeriodo()}
     <div class="sec-title"><span>Minhas despesas</span>${mesSel !== 'todas' ? '<button class="link" id="i-todas">Ver todas</button>' : ''}</div>
     <div class="list" id="i-lista">
       ${lista.map(d => `<button class="item" data-id="${esc(d.id)}">${icone(d.categoria)}
-        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${d.observacao ? esc(d.observacao) + ' · ' : ''}${dm(d.data)}</div></div>
-        <div class="r"><b>${brl(d.valor)}</b>${badge(d.status)}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
+        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${dm(d.data)}${d.observacao ? ' · ' + esc(d.observacao) : ''}</div></div>
+        <div class="r"><b>${brl(d.valor)}</b>${badge(statusVisto(d))}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
     </div>
+    <div class="fab-espaco"></div>
     <button class="fab" id="i-fab" aria-label="Nova despesa">+</button>`, 'inicio');
   $('i-mes').onchange = e => { mesSel = e.target.value; telaInicio(); };
   if ($('i-todas')) $('i-todas').onclick = () => { mesSel = 'todas'; telaInicio(); };
@@ -147,9 +175,9 @@ async function telaInicio(recebidas) {
 }
 
 // ---------- C3 · Nova despesa ----------
-function telaNova() {
+function telaNova(r = null) {
   telaAtual = 'nova';
-  let cat = '', centavos = 0, foto = '';
+  let cat = '', centavos = 0, foto = r ? r.foto : '';
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
     ${fotosLigadas ? '<div class="foto-box" id="n-foto"></div>' : '<div class="photo"><span style="font-size:28px">📷</span><span>Foto da nota</span><span class="pill">Indisponível no momento</span></div>'}
@@ -163,7 +191,7 @@ function telaNova() {
     <div id="n-erro" class="alert hidden"></div>
     <button class="btn lg block" id="n-enviar">Enviar despesa</button>`, 'nova');
   $('n-voltar').onclick = telaInicio;
-  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro');
+  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro', foto);
   document.querySelectorAll('#n-cats .chip').forEach(b => b.onclick = () => {
     cat = b.dataset.cat;
     document.querySelectorAll('#n-cats .chip').forEach(x => x.classList.toggle('on', x === b));
@@ -180,6 +208,12 @@ function telaNova() {
       e.preventDefault();
       const d = String(e.data || '').replace(/\D/g, '');
       if (d) mudaValor(Number(((tudo ? '' : String(centavos)) + d).slice(-9)));
+    } else if (e.inputType === 'insertFromPaste' || e.inputType === 'insertReplacementText') {
+      // Valor colado (ex.: "R$ 1.234,56" ou "50"): substitui o que estava no campo, em vez de juntar os dígitos
+      e.preventDefault();
+      const t = String(e.data || (e.dataTransfer && e.dataTransfer.getData('text')) || '').replace(/[^\d.,]/g, '');
+      const m = /^(.*?)(?:[.,](\d{1,2}))?$/.exec(t);
+      mudaValor(Math.min(999999999, Number(m[1].replace(/\D/g, '') || '0') * 100 + Number((m[2] || '0').padEnd(2, '0'))));
     } else if (e.inputType.startsWith('delete')) {
       e.preventDefault();
       mudaValor(tudo ? 0 : Math.floor(centavos / 10));
@@ -188,15 +222,26 @@ function telaNova() {
   campoValor.addEventListener('input', e => mudaValor(Number(e.target.value.replace(/\D/g, '').slice(-9) || 0)));
   campoValor.addEventListener('focus', fimValor);
   campoValor.addEventListener('click', fimValor);
+  if (r) { // voltou do login com a despesa que estava sendo enviada quando a sessão expirou
+    const chipCat = [...document.querySelectorAll('#n-cats .chip')].find(x => x.dataset.cat === r.categoria);
+    if (chipCat) chipCat.click();
+    mudaValor(r.centavos); $('n-data').value = r.data; $('n-obs').value = r.observacao;
+    erro('n-erro', 'Sua sessão tinha expirado. Confira os dados e toque em "Enviar despesa".');
+  }
   $('n-enviar').onclick = async () => {
     erro('n-erro', '');
     if (!cat) return erro('n-erro', 'Escolha a categoria.');
     if (!centavos) return erro('n-erro', 'Informe o valor da nota.');
     const b = $('n-enviar'); b.disabled = true; b.textContent = foto ? 'Enviando foto...' : 'Enviando...';
+    const dados = { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto };
+    const usuario = me.usuario;
     try {
-      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto });
+      ultima = await post('/api/despesas', dados);
       telaEnviada();
-    } catch (err) { erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa'; }
+    } catch (err) {
+      if (err.login) { rascunho = { ...dados, centavos, usuario }; return; } // já está no login: guarda o que foi digitado
+      erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa';
+    }
   };
 }
 
@@ -218,20 +263,40 @@ function telaEnviada() {
 }
 
 // ---------- C5 · Detalhe da despesa ----------
+// Card "não enviadas": despesas que ainda não estão em nenhum período (as recusadas não contam).
+// O colaborador fecha o período quando quiser (ex.: de 18 a 27) e as despesas vão juntas para pagamento.
+// Card "A receber": aprovadas ainda não pagas (de todos os meses). O sistema separa por semana sozinho e o
+// Maurício paga cada semana pelo painel; não há nada para o colaborador "fechar".
+function cardPeriodo() {
+  const aberta = d => d.periodo && d.periodo.status === ABERTA;
+  const aReceber = despesas.filter(d => d.status === STATUS.aprovada && aberta(d));
+  const anal = despesas.filter(d => d.status === STATUS.analise).length;
+  if (!aReceber.length && !anal) return '';
+  return `<div class="card periodo-card">
+    <div class="t">A receber: ${brl(aReceber.reduce((s, d) => s + d.valor, 0))} <span class="s">(todos os meses)</span></div>
+    <div class="s">${aReceber.length} despesa${aReceber.length === 1 ? '' : 's'} aprovada${aReceber.length === 1 ? '' : 's'} aguardando pagamento${anal ? ` · ${anal} em análise pelo Maurício` : ''}. O pagamento é feito por semana.</div>
+  </div>`;
+}
+
 function telaDetalhe(d) {
   telaAtual = 'detalhe'; detalheId = d.id;
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
-  const linha = d.status === 'Aprovada' ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
-    : d.status === 'Recusada' ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
+  const linha = d.status === STATUS.aprovada ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
+    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
+  const linhaPer = !d.periodo || d.status === STATUS.recusada ? ''
+    : d.periodo.status === ANTERIOR ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
+    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
+    : d.status === STATUS.aprovada ? `<div class="okline gray">Aguardando pagamento · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>` : '';
+  const editavel = d.status === STATUS.analise; // depois de avaliada pelo Maurício, não muda mais
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
     ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
        <span class="tip center">Toque na foto para ampliar.</span>`
     : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
-    ${d.status === 'Em análise' && fotosLigadas
+    ${editavel && fotosLigadas
     ? (d.foto ? '<button class="btn block secondary" id="d-trocar">📷 Trocar foto</button><div class="foto-box hidden" id="d-foto"></div>' : '<div class="foto-box" id="d-foto"></div>')
     : ''}
     <div class="card rows">
@@ -239,12 +304,13 @@ function telaDetalhe(d) {
       <div><span>Valor</span><span>${brl(d.valor)}</span></div>
       <div><span>Data da nota</span><span>${dmy(d.data)}</span></div>
       <div><span>Observação</span><span>${esc(d.observacao) || '—'}</span></div>
-      <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
-      <div><span>Status</span><span>${badge(d.status)}</span></div>
+      <div><span>Lançada em</span><span>${quando(d.criadoEm)}</span></div>
+      <div><span>Status</span><span>${badge(statusVisto(d))}</span></div>
     </div>
     <div id="d-erro-foto" class="alert hidden"></div>
     ${linha}
-    ${d.status === 'Em análise' ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
+    ${linhaPer}
+    ${editavel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
   if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
   if ($('d-foto')) seletorFoto($('d-foto'), async f => {
@@ -254,12 +320,21 @@ function telaDetalhe(d) {
       const nova = await api('/api/despesas/' + encodeURIComponent(d.id) + '/foto', { method: 'PUT', body: JSON.stringify({ foto: f }) });
       despesas = despesas.map(x => (x.id === nova.id ? nova : x));
       telaDetalhe(nova);
-    } catch (err) { telaDetalhe(d); erro('d-erro-foto', err.message); }
+    } catch (err) { if (err.login) return; await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
   }, 'd-erro-foto');
   if ($('d-excluir')) $('d-excluir').onclick = async () => {
     if (!(await confirmar('Ela sai da sua lista e do painel do Maurício.', { titulo: 'Excluir esta despesa?', ok: 'Excluir', perigo: true }))) return;
-    try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); } catch (err) { erro('d-erro', err.message); }
+    try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); }
+    catch (err) { if (err.login) return; await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
   };
+}
+// Depois de um erro, busca a despesa de novo: se ela foi aprovada ou enviada num período em outro lugar,
+// a tela deixa de oferecer "Trocar foto" e "Excluir"
+async function redesenharDetalhe(d) {
+  try { despesas = await api('/api/despesas'); } catch { /* sem conexão: usa a que já tem */ }
+  if (!me) return; // a sessão expirou e a tela já foi para o login
+  const nova = despesas.find(x => x.id === d.id);
+  if (nova) telaDetalhe(nova); else await telaInicio(despesas);
 }
 
 // ---------- Perfil ----------
@@ -291,7 +366,7 @@ function telaPerfil() {
       await post('/api/me/senha', { atual: $('p-atual').value, nova: $('p-nova').value });
       ['p-atual', 'p-nova', 'p-conf'].forEach(id => { $(id).value = ''; });
       $('p-ok').classList.remove('hidden');
-    } catch (err) { erro('p-erro', err.message); }
+    } catch (err) { if (err.login) return; erro('p-erro', err.message); }
     $('p-salvar').disabled = false;
   };
   $('p-sair').onclick = async () => { try { await fetch('/api/logout', { method: 'POST' }); } catch {} telaLogin(); };
@@ -309,7 +384,7 @@ async function atualizarSozinho() {
   try {
     const novas = await api('/api/despesas');
     if (versaoNova) return location.reload();
-    if (JSON.stringify(novas) === JSON.stringify(despesas)) return;
+    if (JSON.stringify(novas) === JSON.stringify(despesas) && !semConexaoNaTela) return;
     const y = window.scrollY;
     if (telaAtual === 'inicio') await telaInicio(novas);
     else if (telaAtual === 'detalhe') {
@@ -329,11 +404,18 @@ async function iniciar() {
   me = await api('/api/me');
   if (!categorias.length) categorias = await api('/api/categorias');
   try { fotosLigadas = !!(await api('/api/config')).fotos; } catch { fotosLigadas = false; }
-  await telaInicio();
+  const r = rascunho; rascunho = null;
+  if (r && r.usuario === me.usuario) telaNova(r); else await telaInicio();
 }
-iniciar().catch(err => {
-  // 401 já leva ao login; qualquer outro erro (servidor fora do ar, sem internet) mostra aviso em vez de tela em branco
-  if (me || err.login) return;
-  telaLogin();
-  erro('l-erro', 'Não foi possível conectar ao servidor. Tente de novo em instantes.');
-});
+function comecar() {
+  iniciar().catch(err => {
+    // 401 já leva ao login. Sem conexão (ou servidor fora do ar): tela própria com "Tentar de novo", e não o
+    // login, para a pessoa não achar que foi desconectada
+    if (me || err.login) return;
+    mostrar(`<div class="sem-rede"><span style="font-size:40px">📶</span><h2>Sem conexão</h2>
+      <p class="muted">${err.rede ? MSG_REDE : 'Não foi possível falar com o servidor agora. Tente de novo em instantes.'}</p>
+      <button class="btn lg block" id="r-tentar">Tentar de novo</button></div>`, '');
+    $('r-tentar').onclick = comecar;
+  });
+}
+comecar();

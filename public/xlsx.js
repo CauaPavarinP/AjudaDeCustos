@@ -37,10 +37,12 @@
     return new Blob([...partes, ...central, fim], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   }
 
+  // tira os caracteres de controle que o XML não aceita
+  // eslint-disable-next-line no-control-regex
   const xml = s => String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
     .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const letra = i => { let s = ''; for (i++; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
-  const nomeAba = (s, i) => (String(s || 'Aba ' + (i + 1)).replace(/[\[\]:*?/\\]/g, ' ').slice(0, 31)) || 'Aba ' + (i + 1);
+  const nomeAba = (s, i) => (String(s || 'Aba ' + (i + 1)).replace(/[[\]:*?/\\]/g, ' ').slice(0, 31)) || 'Aba ' + (i + 1);
 
   // Estilos: 0 normal · 1 cabeçalho · 2 moeda · 3 total (texto) · 4 total (moeda)
   const ESTILOS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

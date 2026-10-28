@@ -5,6 +5,7 @@ const express = require('express');
 const { criarStore, novoId, paraNumero } = require('./services/store');
 const { resumoErro, ondeAconteceu } = require('./services/erros');
 const { criarFotos, lerDataUrl } = require('./services/fotos');
+const Regras = require('./public/regras');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
@@ -22,7 +23,28 @@ const CATEGORIAS = [
 const NOMES_CAT = CATEGORIAS.map(c => c.nome);
 const FUNCOES_INICIAIS = ['Vendedor', 'Promotora'];
 const VALOR_MAXIMO = 50000;
-const STATUS = { analise: 'Em análise', aprovada: 'Aprovada', recusada: 'Recusada' };
+// ---- pagamentos por semana ----
+// As despesas do celular são agrupadas sozinhas por colaborador e SEMANA (pela data da nota), sem ninguém
+// precisar "fechar" nada. Cada registro da aba Periodos é um PAGAMENTO já feito: semana, valor pago, quem
+// pagou e quando; cada despesa paga recebe o ID dele em periodoId (despesa sem periodoId = ainda não paga).
+// As regras que as telas também usam (status, semana, despesa antiga) ficam em public/regras.js.
+const { STATUS, PAGO, ABERTA, ANTERIOR, LIBERADA, ANTES_DO_SISTEMA, semanaDe, fimSemana, naoPaga } = Regras;
+// Trava por chave: pagar e mudar o status de uma nota da mesma semana rodam um de cada vez, sem se cruzar.
+// Vale porque o sistema roda num servidor só (uma instância no Render).
+const travas = new Map();
+function comTrava(chave, tarefa) {
+  const vez = (travas.get(chave) || Promise.resolve()).then(tarefa, tarefa);
+  const fim = vez.catch(() => {});
+  travas.set(chave, fim);
+  fim.then(() => { if (travas.get(chave) === fim) travas.delete(chave); });
+  return vez;
+}
+const chaveSemana = d => `semana:${d.colaboradorId}:${semanaDe(d.data)}`;
+// Início do controle de pagamentos (gravado na aba Config na primeira vez que o servidor sobe com esta versão).
+// Despesas lançadas ANTES disso podem já ter sido reembolsadas fora do sistema: não entram sozinhas nos
+// pagamentos; o Maurício decide ("Já foram pagas" ou "Incluir para pagar", que marca LIBERADA).
+let INICIO_PERIODOS = '';
+const antiga = d => Regras.antiga(d, INICIO_PERIODOS);
 
 for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   if (!process.env[v]) {
@@ -141,6 +163,16 @@ const publicoPrest = p => ({ ...p, fotos: refsPrest(p).length, fotosV: refsPrest
 const posFoto = (refs, n, v) => (v ? refs.findIndex(r => versaoFoto(r) === v) : Number(n));
 const publicoColab = c => ({ id: c.id, nome: c.nome, usuario: c.usuario, funcao: c.funcao, ativo: c.ativo, criadoEm: c.criadoEm,
   telefone: c.telefone || '', cidade: c.cidade || '', uf: c.uf || '' });
+// Para o painel: inclui os dados bancários (saem no PDF). O app do colaborador não recebe esses dados.
+const adminColab = c => ({ ...publicoColab(c), banco: c.banco || '', agencia: c.agencia || '', conta: c.conta || '', cpf: c.cpf || '', pix: c.pix || '' });
+// CPF com 11 dígitos e dígitos verificadores certos (pega erro de digitação); devolve no formato 000.000.000-00
+function cpfFormatado(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1+$/.test(d)) return '';
+  const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  if (dv(9) !== Number(d[9]) || dv(10) !== Number(d[10])) return '';
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
 const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
 // Bloqueio simples contra tentativas de adivinhar senha. Dois contadores:
@@ -234,9 +266,15 @@ app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
 }));
 
 app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
-  const lista = (await store.list('Despesas')).filter(d => d.colaboradorId === req.colab.id)
+  const [todas, periodos] = await Promise.all([store.list('Despesas'), store.list('Periodos')]);
+  const lista = todas.filter(d => d.colaboradorId === req.colab.id)
     .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
-  res.json(lista.map(publicoDesp));
+  // Cada despesa paga vai com o pagamento (semana e data); a não paga vai com a semana em que cai
+  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm }]));
+  res.json(lista.map(d => {
+    const sem = semanaDe(d.data);
+    return { ...publicoDesp(d), periodo: per.get(d.periodoId) || (antiga(d) ? { status: ANTERIOR } : { status: ABERTA, dataInicial: sem, dataFinal: fimSemana(sem) }) };
+  }));
 }));
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
@@ -267,28 +305,36 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
 }));
 
 // Foto da despesa: o colaborador vê a própria; pode adicionar ou trocar enquanto está em análise
-const minhaDespesa = async req => (await store.list('Despesas')).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
+const minhaDespesa = async (req, fresco = false) => (await store.list('Despesas', { fresco })).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
 app.get('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
   const d = await minhaDespesa(req);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   enviarFoto(res, d);
 }));
 app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
-  const d = await minhaDespesa(req);
+  const d = await minhaDespesa(req, true);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
-  if (d.status !== STATUS.analise) return erro(res, 'Só dá para mudar a foto enquanto a despesa está em análise.');
+  if (d.status !== STATUS.analise || !naoPaga(d)) return erro(res, 'Só dá para mudar a foto enquanto a despesa está em análise.');
   const f = await guardarFoto(d.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
-  const atual = await store.update('Despesas', d.id, { foto: f.ref });
-  apagarFoto(d.foto);
+  // Condição: só troca se continua em análise e fora de período (pode ter sido aprovada/enviada durante o envio da foto)
+  const atual = await store.update('Despesas', d.id, { foto: f.ref }, a => a.status === STATUS.analise && naoPaga(a));
+  if (!atual) {
+    apagarFoto(f.ref); // a foto nova não ficou ligada a nada: apaga do Cloudinary
+    return atual === null ? erro(res, 'Despesa não encontrada.', 404)
+      : erro(res, 'Esta despesa acabou de ser avaliada pelo Maurício e não pode mais ser alterada.', 409);
+  }
+  apagarFoto(d.foto); // a foto antiga
   res.json(publicoDesp(atual));
 }));
 
 app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
-  const d = (await store.list('Despesas')).find(x => x.id === req.params.id && x.colaboradorId === req.colab.id);
+  const d = await minhaDespesa(req, true);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
-  if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
-  await store.remove('Despesas', d.id);
+  if (d.status !== STATUS.analise || !naoPaga(d)) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
+  const r = await store.remove('Despesas', d.id, a => a.status === STATUS.analise && naoPaga(a)); // confere de novo na hora de apagar
+  if (r === 'conflito') return erro(res, 'Esta despesa acabou de ser avaliada pelo Maurício e não pode mais ser excluída.', 409);
+  if (r && r.foto !== d.foto) apagarFoto(r.foto); // a foto foi trocada durante a exclusão: apaga a que estava na linha
   apagarFoto(d.foto);
   res.json({ ok: true });
 }));
@@ -310,13 +356,13 @@ app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
 app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
-  const [colaboradores, funcoes, prestacoes, despesas] = await Promise.all(
-    ['Colaboradores', 'Funcoes', 'Prestacoes', 'Despesas'].map(t => store.list(t)));
+  const [colaboradores, funcoes, prestacoes, despesas, periodos] = await Promise.all(
+    ['Colaboradores', 'Funcoes', 'Prestacoes', 'Despesas', 'Periodos'].map(t => store.list(t)));
   res.json({
     categorias: CATEGORIAS,
     funcoes: funcoes.map(f => f.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')),
-    colaboradores: colaboradores.map(publicoColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
-    prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp),
+    colaboradores: colaboradores.map(adminColab).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+    prestacoes: prestacoes.map(publicoPrest), despesas: despesas.map(publicoDesp), periodos, inicioPeriodos: INICIO_PERIODOS,
     fotos: !!fotos,
   });
 }));
@@ -325,9 +371,13 @@ app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
 app.post('/api/admin/funcoes', exigeAdmin, wrap(async (req, res) => {
   const nome = texto(req.body.nome, 40);
   if (nome.length < 2) return erro(res, 'Informe o nome da função.');
-  const existe = (await store.list('Funcoes')).some(f => f.nome.toLowerCase() === nome.toLowerCase());
-  if (existe) return erro(res, 'Essa função já existe.');
-  await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
+  // Um cadastro de cada vez: dois pedidos juntos não criam a mesma função duas vezes
+  const criou = await comTrava('funcoes', async () => {
+    const existe = (await store.list('Funcoes', { fresco: true })).some(f => f.nome.toLowerCase() === nome.toLowerCase());
+    if (!existe) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
+    return !existe;
+  });
+  if (!criou) return erro(res, 'Essa função já existe.');
   res.status(201).json({ ok: true });
 }));
 // Só exclui função que nenhum colaborador (ativo ou inativo) usa. Os lançamentos antigos guardam
@@ -353,37 +403,49 @@ async function validarColab(body, idAtual) {
   const telefone = texto(body.telefone, 20), cidade = texto(body.cidade, 60), uf = texto(body.uf, 2).toUpperCase();
   if (nome.length < 2) return { erro: 'Informe o nome.' };
   if (uf && !UFS.includes(uf)) return { erro: 'Escolha a UF da lista.' };
+  // Dados bancários (opcionais, saem no PDF)
+  const banco = texto(body.banco, 40), agencia = texto(body.agencia, 15), conta = texto(body.conta, 25), pix = texto(body.pix, 80);
+  const cpfDigitado = texto(body.cpf, 20), cpf = cpfFormatado(cpfDigitado);
+  if (cpfDigitado && !cpf) return { erro: 'CPF inválido. Confira os números.' };
   if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
   const funcoes = (await store.list('Funcoes')).map(f => f.nome);
   if (!funcoes.includes(funcao)) return { erro: 'Escolha uma função cadastrada.' };
-  const todos = await store.list('Colaboradores');
+  const todos = await store.list('Colaboradores', { fresco: true });
   if (todos.some(c => c.usuario === usuario && c.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
-  return { nome, usuario, funcao, telefone, cidade, uf };
+  return { nome, usuario, funcao, telefone, cidade, uf, banco, agencia, conta, cpf, pix };
 }
 
 app.post('/api/admin/colaboradores', exigeAdmin, wrap(async (req, res) => {
-  const v = await validarColab(req.body);
-  if (v.erro) return erro(res, v.erro);
   const senha = senhaTemporaria();
-  const c = { id: novoId(), ...v, ativo: true, senhaHash: hashSenha(senha), criadoEm: new Date().toISOString() };
-  await store.add('Colaboradores', c);
-  res.status(201).json({ ...publicoColab(c), senhaTemporaria: senha });
+  // Validação e gravação juntas, um cadastro de cada vez: dois pedidos juntos não criam o mesmo usuário duas vezes
+  const r = await comTrava('colaboradores', async () => {
+    const v = await validarColab(req.body);
+    if (v.erro) return v;
+    const c = { id: novoId(), ...v, ativo: true, senhaHash: hashSenha(senha), criadoEm: new Date().toISOString() };
+    await store.add('Colaboradores', c);
+    return c;
+  });
+  if (r.erro) return erro(res, r.erro);
+  res.status(201).json({ ...adminColab(r), senhaTemporaria: senha });
 }));
 
 app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
   const campos = {};
-  if ('nome' in req.body) {
-    const v = await validarColab(req.body, id);
-    if (v.erro) return erro(res, v.erro);
-    Object.assign(campos, v);
-  }
   if ('ativo' in req.body) campos.ativo = !!req.body.ativo;
   let senha;
   if (req.body.novaSenha) { senha = senhaTemporaria(); campos.senhaHash = hashSenha(senha); }
-  const c = await store.update('Colaboradores', id, campos);
+  const c = await comTrava('colaboradores', async () => { // mesma trava do cadastro (o usuário pode mudar aqui)
+    if ('nome' in req.body) {
+      const v = await validarColab(req.body, id);
+      if (v.erro) return v;
+      Object.assign(campos, v);
+    }
+    return store.update('Colaboradores', id, campos);
+  });
+  if (c && c.erro) return erro(res, c.erro);
   if (!c) return erro(res, 'Colaborador não encontrado.', 404);
-  res.json({ ...publicoColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
+  res.json({ ...adminColab(c), ...(senha ? { senhaTemporaria: senha } : {}) });
 }));
 
 // Só exclui colaborador sem nenhum lançamento; quem tem histórico deve ser desativado,
@@ -446,8 +508,8 @@ app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
 app.delete('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
   const p = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
   if (!p) return erro(res, 'Prestação não encontrada.', 404);
-  await store.remove('Prestacoes', p.id);
-  refsPrest(p).forEach(apagarFoto);
+  const apagada = await store.remove('Prestacoes', p.id);
+  refsPrest(apagada && apagada.id ? apagada : p).forEach(apagarFoto); // fotos que estavam na linha na hora (inclui uma enviada há pouco)
   res.json({ ok: true });
 }));
 
@@ -460,9 +522,15 @@ app.post('/api/admin/prestacoes/:id/fotos', exigeAdmin, wrap(async (req, res) =>
   const f = await guardarFoto('prest-' + p.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
   // lê de novo logo antes de gravar, para não perder uma foto enviada ao mesmo tempo
-  const agora = await acharPrest(p.id);
+  const agora = (await store.list('Prestacoes', { fresco: true })).find(x => x.id === p.id);
   if (!agora) { apagarFoto(f.ref); return erro(res, 'Prestação não encontrada.', 404); }
-  const atual = await store.update('Prestacoes', p.id, { fotos: [...refsPrest(agora), f.ref].join('|') });
+  if (refsPrest(agora).length >= MAX_FOTOS_PREST) { apagarFoto(f.ref); return erro(res, `Cada prestação aceita até ${MAX_FOTOS_PREST} fotos.`); }
+  // Condição: só grava se ninguém mexeu nas fotos durante o envio (senão uma das duas fotos se perderia)
+  const atual = await store.update('Prestacoes', p.id, { fotos: [...refsPrest(agora), f.ref].join('|') }, a => String(a.fotos || '') === String(agora.fotos || ''));
+  if (!atual) {
+    apagarFoto(f.ref);
+    return atual === null ? erro(res, 'Prestação não encontrada.', 404) : erro(res, 'As fotos desta prestação mudaram durante o envio. Envie esta foto de novo.', 409);
+  }
   res.status(201).json(publicoPrest(atual));
 }));
 app.get('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, res) => {
@@ -492,17 +560,105 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   // Aprovar/recusar só o que está em análise; desfazer só o que já foi avaliado. Evita que uma aba
   // com dados antigos troque, sem avisar, uma decisão já tomada em outra aba.
   const pode = atual => (acao === 'reabrir' ? atual.status !== STATUS.analise : atual.status === STATUS.analise);
-  const d = await store.update('Despesas', String(req.params.id), {
-    status,
-    avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
-    avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
-  }, pode);
-  if (d === null) return erro(res, 'Despesa não encontrada.', 404);
-  if (d === false) return erro(res, 'Esta despesa já foi alterada em outra tela. A lista foi atualizada; confira o status atual.', 409);
-  res.json(publicoDesp(d));
+  const id = String(req.params.id);
+  const antes = (await store.list('Despesas', { fresco: true })).find(x => x.id === id);
+  if (!antes) return erro(res, 'Despesa não encontrada.', 404);
+  // Roda com a trava da semana da despesa (não cruza com um pagamento dessa semana em andamento)
+  const MSG_PAGA = 'Esta despesa já foi paga. Desfaça o pagamento em Pagamentos antes de mudar a despesa.';
+  if (!naoPaga(antes)) return erro(res, MSG_PAGA);
+  const r = await comTrava(chaveSemana(antes), async () => {
+    const agora = (await store.list('Despesas', { fresco: true })).find(x => x.id === id);
+    if (agora && !naoPaga(agora)) return { erro: MSG_PAGA, status: 400 };
+    return { d: await store.update('Despesas', id, {
+      status,
+      avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
+      avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
+    }, a => pode(a) && naoPaga(a)) };
+  });
+  if (r.erro) return erro(res, r.erro, r.status);
+  if (r.d === null) return erro(res, 'Despesa não encontrada.', 404);
+  if (r.d === false) return erro(res, 'Esta despesa já foi alterada em outra tela. A lista foi atualizada; confira o status atual.', 409);
+  res.json(publicoDesp(r.d));
 }));
 app.get('/api/admin/despesas/:id/foto', exigeAdmin, wrap(async (req, res) =>
   enviarFoto(res, (await store.list('Despesas')).find(x => x.id === req.params.id))));
+
+// ---- pagamentos (painel) ----
+const acharPeriodo = async id => (await store.list('Periodos', { fresco: true })).find(p => p.id === String(id));
+const acharColab = async id => (await store.list('Colaboradores')).find(x => x.id === String(id || ''));
+// Pagar a semana de um colaborador: só depois de todas as notas não pagas dessa semana serem aprovadas ou
+// recusadas. Cria o registro do pagamento e marca cada despesa aprovada com o ID dele.
+app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
+  const c = await acharColab(req.body.colaboradorId);
+  if (!c) return erro(res, 'Escolha o colaborador.');
+  const semana = texto(req.body.semana, 10);
+  if (!dataValida(semana) || semanaDe(semana) !== semana) return erro(res, 'Semana inválida.');
+  const r = await comTrava(`semana:${c.id}:${semana}`, async () => {
+    const notas = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && semanaDe(d.data) === semana
+      && naoPaga(d) && d.status !== STATUS.recusada && !antiga(d));
+    const anal = notas.filter(d => d.status === STATUS.analise).length;
+    if (anal) return { erro: `Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise nesta semana. Aprove ou recuse antes de pagar.` };
+    if (!notas.length) return { erro: 'Não há despesas aprovadas a pagar nesta semana.' };
+    const agora = new Date().toISOString();
+    const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: semana, dataFinal: fimSemana(semana), status: PAGO,
+      fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: ADMIN_NOME, valorPago: 0 };
+    await store.add('Periodos', pg);
+    let soma = 0, n = 0;
+    for (const d of notas) {
+      const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, a => a.status === STATUS.aprovada && naoPaga(a));
+      if (ok) { soma += ok.valor; n++; }
+    }
+    if (!n) { await store.remove('Periodos', pg.id); return { erro: 'Essas despesas acabaram de mudar em outra tela. A lista foi atualizada.', status: 409 }; }
+    return { pagamento: await store.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+  });
+  if (r.erro) return erro(res, r.erro, r.status || 400);
+  res.status(201).json(r);
+}));
+// Despesas antigas (lançadas antes do controle de pagamentos): o Maurício decide por colaborador.
+// jaPagas: viram um pagamento "pago antes do sistema"; senão ficam LIBERADAS e entram nas semanas para pagar.
+// Roda uma decisão por colaborador de cada vez (dois cliques seguidos não criam dois pagamentos), e cada nota
+// só entra se ainda estiver aprovada e sem pagamento (pode ter sido desfeita no mesmo instante).
+app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
+  const c = await acharColab(req.body.colaboradorId);
+  if (!c) return erro(res, 'Escolha o colaborador.');
+  const livre = a => !a.periodoId && a.status === STATUS.aprovada;
+  const r = await comTrava(`antigas:${c.id}`, async () => {
+    const lista = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && antiga(d));
+    if (!lista.length) return { erro: 'Esse colaborador não tem despesas antigas pendentes.' };
+    if (req.body.jaPagas !== true) {
+      let n = 0;
+      for (const d of lista) if (await store.update('Despesas', d.id, { periodoId: LIBERADA }, livre)) n++;
+      return { notas: n };
+    }
+    const datas = lista.map(d => d.data).sort(), agora = new Date().toISOString();
+    const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: datas[0], dataFinal: datas[datas.length - 1], status: PAGO,
+      fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: `${ADMIN_NOME} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
+    await store.add('Periodos', pg);
+    let soma = 0, n = 0;
+    for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, livre); if (ok) { soma += ok.valor; n++; } }
+    if (!n) { // todas mudaram no meio do caminho: não deixa um pagamento vazio
+      await store.remove('Periodos', pg.id);
+      return { erro: 'As despesas antigas mudaram enquanto você decidia. Confira a tela de novo.', status: 409 };
+    }
+    return { pagamento: await store.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+  });
+  if (r.erro) return erro(res, r.erro, r.status || 400);
+  res.status(201).json(r);
+}));
+// Desfazer um pagamento: as despesas voltam a "não pagas" (as antigas que estavam liberadas continuam
+// liberadas; as de um "pago antes do sistema" voltam para a caixa das antigas, para decidir de novo).
+app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => {
+  const pg = await acharPeriodo(req.params.id);
+  if (!pg) return erro(res, 'Pagamento não encontrado.', 404);
+  const antesDoSistema = Regras.antesDoSistema(pg);
+  await comTrava(`semana:${pg.colaboradorId}:${pg.dataInicial}`, async () => {
+    for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === pg.id)) {
+      await store.update('Despesas', d.id, { periodoId: !antesDoSistema && d.criadoEm < INICIO_PERIODOS ? LIBERADA : '' });
+    }
+    await store.remove('Periodos', pg.id);
+  });
+  res.json({ ok: true });
+}));
 
 // ---------------- páginas ----------------
 // no-cache: o navegador sempre confere se há versão nova (evita admin.html antigo com admin.js novo)
@@ -523,6 +679,13 @@ app.use((err, req, res, next) => {
 
 async function iniciar() {
   await store.init();
+  // Início do controle de pagamentos: gravado uma vez só (INICIO_PERIODOS no ambiente serve para os testes)
+  const cfg = (await store.list('Config')).find(c => c.id === 'inicioPeriodos');
+  INICIO_PERIODOS = process.env.INICIO_PERIODOS || (cfg && cfg.valor) || '';
+  if (!cfg) {
+    INICIO_PERIODOS = INICIO_PERIODOS || new Date().toISOString();
+    await store.add('Config', { id: 'inicioPeriodos', valor: INICIO_PERIODOS });
+  }
   // Cria as funções iniciais na primeira vez
   if (!(await store.list('Funcoes')).length) {
     for (const nome of FUNCOES_INICIAIS) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });

@@ -99,10 +99,14 @@ tr.total td { background: #eff6ff; font-weight: 700; border-bottom: 0; }
 tr.off td { color: var(--muted); }
 .empty-row td { text-align: center; color: var(--muted); padding: 24px; }
 .tag-app { font-size: 10px; font-weight: 600; color: var(--primary); background: var(--primary-soft); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.modal h4.form-sec { margin: 6px 0 -4px; font-size: 13px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; } /* título de seção dentro de um formulário */
 .pend { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-color: #fde68a; background: #fffdf5; }
 .pend h3 { margin: 0; font-size: 14px; }
 .pend-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) auto 96px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid #fef3c7; font-size: 13px; }
 .pend-row .acts { display: flex; gap: 6px; }
+/* Pagamentos: despesas antigas (nome, valor, botões); no celular os botões vão para baixo */
+.antigas-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.6fr) auto; }
+@media (max-width: 760px) { .antigas-row { grid-template-columns: minmax(0, 1fr) auto !important; } .antigas-row .acts { grid-column: 1 / -1; } }
 .pend-row > span { min-width: 0; overflow-wrap: anywhere; } /* texto longo sem espaço não empurra a tela */
 /* observação longa: mostra até 3 linhas (o texto inteiro aparece ao passar o mouse e no "Ver nota") */
 .obs-txt { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
@@ -124,7 +128,9 @@ td.obs-col { min-width: 140px; max-width: 280px; }
 .chart-card { padding: 16px 18px; }
 .chart-card h3 { margin: 0 0 12px; font-size: 13px; }
 .bars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; align-items: end; height: 160px; }
-.bars .col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+.bars .col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; min-width: 0; }
+/* celular: as 12 colunas precisam caber; os valores em cima das barras saem (aparecem na tabela) */
+@media (max-width: 480px) { .bars { gap: 3px; } .bars .val { display: none; } .bars .lab { font-size: 10px; } }
 .bars .bar { width: 60%; max-width: 32px; background: var(--primary); border-radius: 4px 4px 0 0; min-height: 2px; }
 .bars .bar.zero { background: var(--border); }
 .bars.filtrado .col:not(.sel) .bar { opacity: .3; } /* resumo com filtro de mês: destaca o mês escolhido */
@@ -238,6 +244,16 @@ td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: 
 .okline { background: var(--green-soft); color: var(--green); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; }
 .okline.amber { background: var(--amber-soft); color: var(--amber); }
 .okline.red { background: var(--red-soft); color: var(--red); }
+.okline.blue { background: var(--primary-soft); color: var(--primary-dark); }
+.okline.gray { background: #f1f5f9; color: var(--muted); }
+/* App: card das despesas ainda não enviadas para pagamento */
+.periodo-card { padding: 14px; display: flex; flex-direction: column; gap: 6px; border-color: var(--primary); }
+.periodo-card .t { font-weight: 600; font-size: 14px; }
+.periodo-card .s { font-size: 12px; color: var(--muted); }
+.periodo-card .btn { margin-top: 4px; }
+.fab-espaco { height: 56px; flex-shrink: 0; } /* espaço no fim da lista para o botão + não cobrir a última despesa */
+.sem-rede { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; margin-top: 18vh; }
+.sem-rede h2 { margin: 0; }
 .dica-instalar { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
 .dica-instalar > b { color: var(--text); font-size: 13px; }
 /* foto da nota */

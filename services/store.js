@@ -8,7 +8,8 @@ const crypto = require('crypto');
 const TABELAS = {
   Colaboradores: {
     cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'],
-      ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF']],
+      ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF'],
+      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX']],
     bool: ['ativo'],
   },
   Funcoes: {
@@ -24,8 +25,19 @@ const TABELAS = {
   Despesas: {
     cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['funcao', 'Funcao'],
       ['data', 'Data'], ['categoria', 'Categoria'], ['valor', 'Valor'], ['observacao', 'Observacao'], ['status', 'Status'],
-      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor'], ['foto', 'Foto']],
+      ['criadoEm', 'EnviadaEm'], ['avaliadoEm', 'AvaliadaEm'], ['avaliadoPor', 'AvaliadaPor'], ['foto', 'Foto'],
+      ['periodoId', 'PeriodoID']],
     num: ['valor'],
+  },
+  // Período de pagamento: um grupo de despesas do celular "fechado" pelo colaborador (ou pelo Maurício) e depois pago
+  Periodos: {
+    cols: [['id', 'ID'], ['colaboradorId', 'ColaboradorID'], ['colaborador', 'Colaborador'], ['dataInicial', 'DataInicial'], ['dataFinal', 'DataFinal'],
+      ['status', 'Status'], ['fechadoEm', 'FechadoEm'], ['fechadoPor', 'FechadoPor'], ['pagoEm', 'PagoEm'], ['pagoPor', 'PagoPor'], ['valorPago', 'ValorPago']],
+    num: ['valorPago'],
+  },
+  // Configurações gravadas pelo próprio sistema (ex.: inicioPeriodos = quando o controle de pagamentos começou)
+  Config: {
+    cols: [['id', 'ID'], ['valor', 'Valor']],
   },
 };
 
@@ -85,11 +97,12 @@ function criarStoreMemoria() {
       Object.assign(o, copia(campos));
       return copia(o);
     },
-    async remove(t, id) {
+    // se(atual) opcional: só apaga se a condição for verdadeira (senão devolve 'conflito')
+    async remove(t, id, se) {
       const i = dados[t].findIndex(x => x.id === id);
       if (i < 0) return false;
-      dados[t].splice(i, 1);
-      return true;
+      if (se && !se(copia(dados[t][i]))) return 'conflito';
+      return copia(dados[t].splice(i, 1)[0]); // devolve a linha apagada (como estava na hora)
     },
   };
 }
@@ -101,10 +114,12 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   const auth = new JWT({ email, key: privateKey, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   const doc = new GoogleSpreadsheet(spreadsheetId, auth);
 
-  // Cache curto para não estourar a cota de leitura da API do Google
+  // Cache curto para não estourar a cota de leitura da API do Google.
+  // versao[t] muda a cada gravação: uma leitura que começou antes de uma gravação não entra no cache
+  // (senão o dado velho ficaria guardado por mais 5 s).
   const CACHE_MS = 5000;
-  const cache = {};
-  const limpar = t => { delete cache[t]; };
+  const cache = {}, versao = {};
+  const limpar = t => { delete cache[t]; versao[t] = (versao[t] || 0) + 1; };
 
   async function prepararAba(titulo) {
     const colunas = TABELAS[titulo].cols.map(c => c[1]);
@@ -123,8 +138,9 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   async function linhas(t) {
     const c = cache[t];
     if (c && Date.now() - c.t < CACHE_MS) return c.rows;
+    const v = versao[t] || 0;
     const rows = await doc.sheetsByTitle[t].getRows();
-    cache[t] = { t: Date.now(), rows };
+    if ((versao[t] || 0) === v) cache[t] = { t: Date.now(), rows };
     return rows;
   }
   const acharLinha = async (t, id) => { limpar(t); return (await linhas(t)).find(r => String(r.get('ID')) === id); };
@@ -144,7 +160,9 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       await doc.loadInfo();
       for (const t of Object.keys(TABELAS)) await prepararAba(t);
     },
-    async list(t) {
+    // { fresco: true }: ignora o cache (para decisões que não podem usar dado de até 5 s atrás)
+    async list(t, { fresco } = {}) {
+      if (fresco) limpar(t);
       return (await linhas(t)).map(r => deLinha(t, r.toObject())).filter(o => o.id);
     },
     add: (t, obj) => naFila(t, async () => {
@@ -164,12 +182,14 @@ function criarStoreSheets({ spreadsheetId, email, privateKey }) {
       limpar(t);
       return atual;
     }),
-    remove: (t, id) => naFila(t, async () => {
+    remove: (t, id, se) => naFila(t, async () => {
       const row = await acharLinha(t, id);
       if (!row) return false;
+      const apagada = deLinha(t, row.toObject());
+      if (se && !se(apagada)) return 'conflito';
       await row.delete();
       limpar(t);
-      return true;
+      return apagada; // devolve a linha apagada (como estava na hora)
     }),
   };
 }
