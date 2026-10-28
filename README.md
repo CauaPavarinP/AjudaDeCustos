@@ -95,6 +95,7 @@ Depois, abra `http://localhost:3000` (colaborador) e `http://localhost:3000/admi
 
 ```bash
 npm test             # no Windows/PowerShell: npm.cmd test
+npm run lint         # verificador de código (ESLint): variável não usada, nome digitado errado...
 ```
 
 Sobem o servidor numa porta separada, **sempre em memória** (ignoram o `.env`: nada é gravado na planilha nem no Cloudinary) e conferem login, despesas, fotos, aprovação, Desfazer, troca de senha e as travas de exclusão. Rode antes de cada `git push`.
@@ -128,11 +129,13 @@ public/index.html   app do colaborador (celular)
 public/app.js
 public/admin.html   painel do Maurício
 public/admin.js
+public/regras.js    regras usadas pelo servidor E pelas telas (status, semana de pagamento, despesa antiga)
 public/xlsx.js      gera os arquivos Excel (.xlsx) no navegador
 public/pdf.js       gera o PDF "Prestação de contas" no navegador
 public/dialogo.js   janelas de aviso e confirmação
 public/foto.js      reduz a foto no navegador antes de enviar (celular e painel)
 public/manifest.webmanifest + public/icons/   app na tela inicial do celular
 test/api.test.js    testes automáticos (npm test)
+eslint.config.js    configuração do verificador de código (npm run lint)
 public/style.css    estilos das duas partes
 ```

@@ -16,6 +16,8 @@ const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').
 const CORES_CAT = ['#2563eb', '#7c3aed', '#0ea5e9', '#f59e0b', '#16a34a', '#94a3b8'];
 const CORES_FUNCAO = ['b-purple', 'b-pink', 'b-blue', 'b-amber', 'b-green', 'b-gray'];
 
+const { STATUS, PAGO, PAGA, semanaDe, fimSemana, naoPaga, antesDoSistema } = Regras;
+
 let D = null;          // dados vindos do servidor
 let CAT = [];          // categorias
 const F = {            // filtros de cada tela (ficam guardados ao trocar de tela)
@@ -23,7 +25,7 @@ const F = {            // filtros de cada tela (ficam guardados ao trocar de tel
   c: { colab: '', ano: hoje().slice(0, 4), mes: '' }, // mes '' = o ano inteiro
   f: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '' },
   d: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), colab: '', busca: '', status: '' },
-  p: { colab: '', status: 'Enviado' }, // pagamentos: começa mostrando as semanas aguardando pagamento
+  p: { colab: '', status: 'aguardando' }, // pagamentos: começa mostrando as semanas aguardando pagamento
 };
 
 // Versão nova no servidor (deploy): a página se recarrega sozinha no próximo momento seguro
@@ -66,7 +68,7 @@ async function carregar() {
   const nomes = new Map(D.colaboradores.map(c => [c.id, c.nome]));
   for (const x of [...D.despesas, ...D.prestacoes, ...(D.periodos || [])]) { x.nomeEpoca = x.colaborador; const n = nomes.get(x.colaboradorId); if (n) x.colaborador = n; }
   CAT = D.categorias;
-  const pend = D.despesas.filter(d => d.status === 'Em análise').length;
+  const pend = D.despesas.filter(d => d.status === STATUS.analise).length;
   $('nav-pend').textContent = pend;
   $('nav-pend').classList.toggle('hidden', !pend);
   D.periodos = D.periodos || [];
@@ -81,7 +83,7 @@ function linhas() {
   const zeros = () => Object.fromEntries(CAT.map(c => [c.chave, 0]));
   const rows = D.prestacoes.map(p => ({ ...p, origem: 'painel', valores: Object.fromEntries(CAT.map(c => [c.chave, p[c.chave]])) }));
   const g = new Map();
-  for (const d of D.despesas.filter(x => x.status === 'Aprovada')) {
+  for (const d of D.despesas.filter(x => x.status === STATUS.aprovada)) {
     const mes = d.data.slice(0, 7), k = d.colaboradorId + '|' + mes + '|' + d.funcao;
     let r = g.get(k);
     if (!r) {
@@ -149,7 +151,7 @@ function telaLancamentos() {
   const maior = CAT.map(c => ({ ...c, v: s.v[c.chave] })).sort((a, b) => b.v - a.v)[0];
   const nColab = new Set(rows.map(r => r.colaboradorId)).size;
   const periodo = f.mes ? MESES[Number(f.mes) - 1].toLowerCase() : f.ano;
-  const pend = D.despesas.filter(d => d.status === 'Em análise').sort((a, b) => a.data.localeCompare(b.data));
+  const pend = D.despesas.filter(d => d.status === STATUS.analise).sort((a, b) => a.data.localeCompare(b.data));
 
   $('page').innerHTML = `
     <div class="page-head">
@@ -270,7 +272,7 @@ function modalNota(d, voltar, voltaDepois = false) {
   if (!d) return;
   const quando = iso => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '—');
   const url = '/api/admin/despesas/' + encodeURIComponent(d.id) + '/foto' + (d.fotoV ? '?v=' + d.fotoV : ''); // ?v muda quando a foto é trocada
-  const emAnalise = d.status === 'Em análise';
+  const emAnalise = d.status === STATUS.analise;
   const perPago = periodoTravado(d); // despesa de período pago: não pode mais mudar
   const m = abrirModal(`<h3>Analisar despesa · ${esc(d.colaborador)}</h3>
     <div class="nota-grid">
@@ -290,7 +292,7 @@ function modalNota(d, voltar, voltaDepois = false) {
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
         ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
           : perPago ? '<span class="muted small">Período já pago: para mudar esta despesa, desfaça o pagamento em Pagamentos.</span>'
-          : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === 'Aprovada' ? 'aprovação' : 'recusa'}</button>`}
+          : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === STATUS.aprovada ? 'aprovação' : 'recusa'}</button>`}
         <button class="btn secondary" id="m-fechar">${voltar ? 'Voltar' : 'Fechar'}</button>
       </div>
     </div>`, 'modal-nota');
@@ -349,20 +351,20 @@ function verFotos(lista, inicio = 0) {
 
 // Desfazer = a despesa volta para "Em análise" (sai dos totais, se estava aprovada)
 const confirmarDesfazer = d => confirmar(
-  d.status === 'Aprovada'
+  d.status === STATUS.aprovada
     ? `A despesa de ${d.colaborador} (${brl(d.valor)}) volta para "Em análise" e sai dos totais até ser aprovada de novo.`
     : `A despesa de ${d.colaborador} (${brl(d.valor)}) volta para "Em análise" e pode ser aprovada.`,
-  { titulo: d.status === 'Aprovada' ? 'Desfazer a aprovação?' : 'Desfazer a recusa?', ok: 'Desfazer' });
+  { titulo: d.status === STATUS.aprovada ? 'Desfazer a aprovação?' : 'Desfazer a recusa?', ok: 'Desfazer' });
 
 // ======================= DESPESAS DO CELULAR =======================
 // Todas as despesas enviadas pelo app, com filtro por status (inclui as recusadas, que não aparecem nos Lançamentos)
-const STATUS_COR = { 'Em análise': 'b-amber', Aprovada: 'b-green', Recusada: 'b-red' };
+const STATUS_COR = { [STATUS.analise]: 'b-amber', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red' };
 const periodoDaDespesa = d => d.periodoId && (D.periodos || []).find(p => p.id === d.periodoId);
 const periodoTravado = d => !!periodoDaDespesa(d); // despesa paga (ligada a um pagamento): não muda mais
 // Status como aparece nas telas e no Excel: "Paga" quando o período foi pago
 // Selo "Paga em dd/mm" ao lado da despesa (listas de despesas do app)
 const seloPaga = d => { const p = periodoDaDespesa(d); return p ? ` <span class="badge b-blue">Paga em ${diaBR(p.pagoEm).slice(0, 5)}</span>` : ''; };
-const statusVisto = d => (d.status === 'Aprovada' && (periodoDaDespesa(d) || {}).status === 'Pago' ? 'Paga' : d.status);
+const statusVisto = d => (d.status === STATUS.aprovada && (periodoDaDespesa(d) || {}).status === PAGO ? PAGA : d.status);
 function telaDespesas() {
   const f = F.d;
   const busca = semAcento(f.busca);
@@ -387,13 +389,13 @@ function telaDespesas() {
       <div class="field"><label>Colaborador</label><select class="input" id="d-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
       <div class="field"><label>Buscar</label><input class="input" id="d-busca" placeholder="Nome, categoria ou observação" value="${esc(f.busca)}"></div>
       <div class="chips" style="grid-column:1/-1"><span class="muted small">Status:</span>
-        ${chip('', `Todas (${doPeriodo.length})`)}${chip('Em análise', `Em análise (${conta('Em análise').length})`)}${chip('Aprovada', `Aprovadas (${conta('Aprovada').length})`)}${chip('Recusada', `Recusadas (${conta('Recusada').length})`)}</div>
+        ${chip('', `Todas (${doPeriodo.length})`)}${chip(STATUS.analise, `Em análise (${conta(STATUS.analise).length})`)}${chip(STATUS.aprovada, `Aprovadas (${conta(STATUS.aprovada).length})`)}${chip(STATUS.recusada, `Recusadas (${conta(STATUS.recusada).length})`)}</div>
     </div>
     <div class="kpis">
       <div class="card kpi"><span class="l">Total (filtro atual)</span><span class="v">${brl(soma(rows))}</span><span class="d">${rows.length} despesa${rows.length === 1 ? '' : 's'}</span></div>
-      <div class="card kpi"><span class="l">Em análise</span><span class="v">${brl(soma(conta('Em análise')))}</span><span class="d">${conta('Em análise').length} aguardando</span></div>
-      <div class="card kpi"><span class="l">Aprovadas</span><span class="v">${brl(soma(conta('Aprovada')))}</span><span class="d">${conta('Aprovada').length} no período</span></div>
-      <div class="card kpi"><span class="l">Recusadas</span><span class="v">${brl(soma(conta('Recusada')))}</span><span class="d">${conta('Recusada').length} no período</span></div>
+      <div class="card kpi"><span class="l">Em análise</span><span class="v">${brl(soma(conta(STATUS.analise)))}</span><span class="d">${conta(STATUS.analise).length} aguardando</span></div>
+      <div class="card kpi"><span class="l">Aprovadas</span><span class="v">${brl(soma(conta(STATUS.aprovada)))}</span><span class="d">${conta(STATUS.aprovada).length} no período</span></div>
+      <div class="card kpi"><span class="l">Recusadas</span><span class="v">${brl(soma(conta(STATUS.recusada)))}</span><span class="d">${conta(STATUS.recusada).length} no período</span></div>
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Data</th><th>Colaborador</th><th>Categoria</th><th class="num">Valor</th><th>Observação</th><th>Status</th><th>Nota</th><th>Ações</th></tr></thead>
@@ -402,11 +404,11 @@ function telaDespesas() {
         <td class="b">${esc(d.colaborador)}<br><span class="muted small" style="font-weight:400">${esc(d.funcao)}</span></td>
         <td>${esc(d.categoria)}</td><td class="num b">${fmt(d.valor)}</td>
         <td class="muted obs-col"><div class="obs-txt" title="${esc(d.observacao)}">${esc(d.observacao) || '—'}</div></td>
-        <td>${(() => { const per = d.periodoId && D.periodos.find(p => p.id === d.periodoId); return per && per.status === 'Pago' && d.status === 'Aprovada'
+        <td>${(() => { const per = d.periodoId && D.periodos.find(p => p.id === d.periodoId); return per && per.status === PAGO && d.status === STATUS.aprovada
           ? `<span class="badge b-blue">Paga</span><br><span class="muted small">em ${diaBR(per.pagoEm)}</span>`
           : `<span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span>${d.avaliadoEm ? `<br><span class="muted small">${quando(d.avaliadoEm)}</span>` : ''}`; })()}</td>
         <td>${d.foto ? '📷' : '<span class="muted small">—</span>'}</td>
-        <td><span class="chips">${d.status === 'Em análise'
+        <td><span class="chips">${d.status === STATUS.analise
           ? `<button class="btn xs ok" data-dap="${esc(d.id)}">Aprovar</button><button class="btn xs no" data-drc="${esc(d.id)}">Recusar</button>`
           : periodoTravado(d) ? '<span class="muted small">período pago</span>'
           : `<button class="btn xs" data-dre="${esc(d.id)}">↩ Desfazer</button>`}</span></td></tr>`).join('')
@@ -435,7 +437,7 @@ function telaDespesas() {
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
     [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
     [...rows.map(d => { const p = periodoDaDespesa(d); return [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, statusVisto(d), quando(d.avaliadoEm),
-      p ? `${rotPeriodo(p)} · pago em ${diaBR(p.pagoEm)}` : d.status === 'Aprovada' && !antiga(d) ? `semana ${rotPeriodo({ dataInicial: semanaDe(d.data), dataFinal: fimSemana(semanaDe(d.data)) })} · aguardando pagamento` : '', d.foto ? 'Sim' : 'Não']; }),
+      p ? `${rotPeriodo(p)} · pago em ${diaBR(p.pagoEm)}` : d.status === STATUS.aprovada && !antiga(d) ? `semana ${rotPeriodo({ dataInicial: semanaDe(d.data), dataFinal: fimSemana(semanaDe(d.data)) })} · aguardando pagamento` : '', d.foto ? 'Sim' : 'Não']; }),
       ['Total', '', '', '', soma(rows), '', '', '', '', '']]));
 }
 
@@ -726,7 +728,7 @@ function pdfPrestacao(colab, ano, rows, mes = '') {
   const meses = MESES.map((_, i) => rows.filter(r => Number(r.mesRef.slice(5)) === i + 1)).map((rs, i) => ({ i, rs, s: somar(rs) })).filter(m => m.s.total > 0);
   if (!meses.length) return avisar(`${colab.nome} não tem gastos em ${mes ? MESES[Number(mes) - 1].toLowerCase() + '/' : ''}${ano}.`, 'Nada para exportar');
   // Este PDF soma o mês inteiro, inclusive o que já foi pago pela aba Pagamentos: avisa, para não pagar duas vezes
-  const jaPago = rs => r2(rs.flatMap(r => r.despesas || []).filter(d => statusVisto(d) === 'Paga').reduce((t, d) => t + d.valor, 0));
+  const jaPago = rs => r2(rs.flatMap(r => r.despesas || []).filter(d => statusVisto(d) === PAGA).reduce((t, d) => t + d.valor, 0));
   pdfFolhas(colab, meses.map(m => { const pg = jaPago(m.rs); return {
     periodo: `${MESES[m.i].toUpperCase()} / ${ano}`, s: m.s,
     carimbo: pg && pg >= m.s.total ? 'JÁ PAGO' : '',
@@ -794,20 +796,15 @@ function pdfFolhas(colab, folhas, nomeArquivo) {
 // O sistema separa sozinho as despesas do celular por colaborador e semana (segunda a domingo, pela data
 // da nota). Cada linha "Aguardando pagamento" é uma semana com despesas ainda não pagas; ao pagar, o servidor
 // grava um registro de pagamento (D.periodos) e as despesas pagas ficam ligadas a ele (periodoId).
-const LIBERADA = 'liberada'; // despesa antiga que o Maurício mandou incluir nos pagamentos (mesmo nome do servidor)
-const naoPaga = d => !d.periodoId || d.periodoId === LIBERADA;
-const semanaDe = data => { const d = new Date(data + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
-const fimSemana = ini => { const d = new Date(ini + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); };
-const somaAprov = l => r2(l.filter(d => d.status === 'Aprovada').reduce((s, d) => s + d.valor, 0));
-const antesDoSistema = p => /antes do sistema/.test(p.pagoPor || ''); // marcado como "Já foram pagas" (pago fora do sistema)
+const somaAprov = l => r2(l.filter(d => d.status === STATUS.aprovada).reduce((s, d) => s + d.valor, 0));
 const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
 // Despesa lançada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
-const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.criadoEm && !!D.inicioPeriodos && d.criadoEm < D.inicioPeriodos; // mesma regra do servidor
+const antiga = d => Regras.antiga(d, D.inicioPeriodos);
 // Linhas da tela: semanas com despesas a pagar (calculadas aqui) + pagamentos já feitos (do servidor)
 function linhasPagamento() {
   const abertas = new Map();
-  for (const d of D.despesas.filter(x => naoPaga(x) && x.status !== 'Recusada' && !antiga(x))) {
+  for (const d of D.despesas.filter(x => naoPaga(x) && x.status !== STATUS.recusada && !antiga(x))) {
     const sem = semanaDe(d.data), k = d.colaboradorId + '|' + sem;
     if (!abertas.has(k)) abertas.set(k, { id: k, tipo: 'aberta', colaboradorId: d.colaboradorId, colaborador: d.colaborador, dataInicial: sem, dataFinal: fimSemana(sem), notas: [] });
     abertas.get(k).notas.push(d);
@@ -831,18 +828,18 @@ function blocoAntigas() {
 function telaPagamentos() {
   const f = F.p;
   const todas = linhasPagamento().filter(l => !f.colab || l.colaboradorId === f.colab);
-  const rows = todas.filter(l => !f.status || (f.status === 'Pago' ? l.tipo === 'pago' : l.tipo === 'aberta'));
+  const rows = todas.filter(l => !f.status || (f.status === PAGO ? l.tipo === 'pago' : l.tipo === 'aberta'));
   const aguardando = todas.filter(l => l.tipo === 'aberta');
   const mesAtual = hoje().slice(0, 7);
   const pagosMes = todas.filter(l => l.tipo === 'pago' && !antesDoSistema(l) && diaBR(l.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
-  const anal = aguardando.reduce((s, l) => s + l.notas.filter(d => d.status === 'Em análise').length, 0);
+  const anal = aguardando.reduce((s, l) => s + l.notas.filter(d => d.status === STATUS.analise).length, 0);
   const chip = (st, rot, n) => `<button class="chip sm${f.status === st ? ' on' : ''}" data-st="${esc(st)}">${esc(rot)} (${n})</button>`;
   $('page').innerHTML = `
     <div class="page-head"><div><h1>Pagamentos</h1><p>As despesas do celular são separadas sozinhas por semana (segunda a domingo). Confira, exporte o PDF e marque como pago.</p></div></div>
     ${blocoAntigas()}
     <div class="card filters" style="grid-template-columns:1fr 2fr">
       <div class="field"><label>Colaborador</label><select class="input" id="p-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
-      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', todas.length)}${chip('Enviado', 'Aguardando pagamento', aguardando.length)}${chip('Pago', 'Pagos', todas.length - aguardando.length)}</div></div>
+      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', todas.length)}${chip('aguardando', 'Aguardando pagamento', aguardando.length)}${chip(PAGO, 'Pagos', todas.length - aguardando.length)}</div></div>
     </div>
     <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
       <div class="card kpi"><span class="l">Aguardando pagamento</span><span class="v">${brl(aguardando.reduce((s, l) => s + somaAprov(l.notas), 0))}</span><span class="muted small">${aguardando.length} semana${aguardando.length === 1 ? '' : 's'} (só as aprovadas)</span></div>
@@ -852,7 +849,7 @@ function telaPagamentos() {
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Colaborador</th><th>Semana</th><th>Notas</th><th class="num">Valor aprovado</th><th>Status</th><th>Ações</th></tr></thead>
       <tbody>${rows.map(l => {
-        const na = l.notas.filter(d => d.status === 'Em análise').length, colab = D.colaboradores.find(c => c.id === l.colaboradorId);
+        const na = l.notas.filter(d => d.status === STATUS.analise).length, colab = D.colaboradores.find(c => c.id === l.colaboradorId);
         const pago = l.tipo === 'pago';
         return `<tr>
         <td class="b">${esc(l.colaborador)}</td>
@@ -892,7 +889,7 @@ function telaPagamentos() {
     catch { avisar('Chave PIX: ' + b.dataset.pix, 'Copie a chave'); }
   });
   document.querySelectorAll('[data-pagar]').forEach(b => b.onclick = async () => {
-    const l = acha(b.dataset.pagar), na = l.notas.filter(d => d.status === 'Em análise').length;
+    const l = acha(b.dataset.pagar), na = l.notas.filter(d => d.status === STATUS.analise).length;
     if (na) return avisar(`Ainda há ${na} despesa${na > 1 ? 's' : ''} em análise nesta semana. Clique em "Ver notas" para aprovar ou recusar antes de pagar.`, 'Falta analisar');
     if (!somaAprov(l.notas)) return avisar('Esta semana não tem nenhuma despesa aprovada: não há o que pagar.', 'Nada para pagar');
     if (!(await confirmar(`${l.colaborador} · semana ${rotPeriodo(l)}\nValor: ${brl(somaAprov(l.notas))} (despesas aprovadas)\n\nO colaborador verá "Paga" nessas despesas. Elas não poderão mais ser alteradas, a não ser que você desfaça o pagamento.`, { titulo: 'Marcar como pago?', ok: 'Marcar como pago' }))) return;
@@ -921,7 +918,7 @@ function modalPeriodo(id) {
 }
 function pdfPeriodo(l) {
   const colab = D.colaboradores.find(c => c.id === l.colaboradorId) || { nome: l.colaborador };
-  const aprov = l.notas.filter(d => d.status === 'Aprovada'), anal = l.notas.filter(d => d.status === 'Em análise').length;
+  const aprov = l.notas.filter(d => d.status === STATUS.aprovada), anal = l.notas.filter(d => d.status === STATUS.analise).length;
   if (!aprov.length) return avisar('Esta semana ainda não tem despesas aprovadas.', 'Nada para exportar');
   // Soma por categoria das aprovadas (mesmo formato de somar())
   const v = Object.fromEntries(CAT.map(c => [c.chave, 0]));

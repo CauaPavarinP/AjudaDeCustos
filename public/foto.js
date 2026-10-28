@@ -1,5 +1,6 @@
 // Reduz a foto no próprio navegador antes de enviar (até 1600 px, JPEG): envio rápido e pouca internet.
 // Usado pelo app do colaborador e pelo painel. Devolve "data:image/jpeg;base64,...".
+/* exported comprimirFoto */
 function comprimirFoto(arquivo) {
   return new Promise((ok, falha) => {
     const url = URL.createObjectURL(arquivo), img = new Image();

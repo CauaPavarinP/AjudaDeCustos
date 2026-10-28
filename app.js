@@ -5,6 +5,7 @@ const express = require('express');
 const { criarStore, novoId, paraNumero } = require('./services/store');
 const { resumoErro, ondeAconteceu } = require('./services/erros');
 const { criarFotos, lerDataUrl } = require('./services/fotos');
+const Regras = require('./public/regras');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
@@ -22,21 +23,12 @@ const CATEGORIAS = [
 const NOMES_CAT = CATEGORIAS.map(c => c.nome);
 const FUNCOES_INICIAIS = ['Vendedor', 'Promotora'];
 const VALOR_MAXIMO = 50000;
-const STATUS = { analise: 'Em análise', aprovada: 'Aprovada', recusada: 'Recusada' };
 // ---- pagamentos por semana ----
 // As despesas do celular são agrupadas sozinhas por colaborador e SEMANA (pela data da nota), sem ninguém
 // precisar "fechar" nada. Cada registro da aba Periodos é um PAGAMENTO já feito: semana, valor pago, quem
 // pagou e quando; cada despesa paga recebe o ID dele em periodoId (despesa sem periodoId = ainda não paga).
-const INICIO_SEMANA = 1; // dia em que a semana começa: 1 = segunda-feira (0 = domingo)
-const PAGO = 'Pago';
-const LIBERADA = 'liberada'; // despesa antiga que o Maurício mandou incluir nos pagamentos (ver "anterior")
-const semanaDe = data => { // segunda-feira (AAAA-MM-DD) da semana de uma data
-  const d = new Date(data + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() - INICIO_SEMANA + 7) % 7));
-  return d.toISOString().slice(0, 10);
-};
-const fimSemana = ini => { const d = new Date(ini + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); };
-const naoPaga = d => !d.periodoId || d.periodoId === LIBERADA;
+// As regras que as telas também usam (status, semana, despesa antiga) ficam em public/regras.js.
+const { STATUS, PAGO, ABERTA, ANTERIOR, LIBERADA, ANTES_DO_SISTEMA, semanaDe, fimSemana, naoPaga } = Regras;
 // Trava por chave: pagar e mudar o status de uma nota da mesma semana rodam um de cada vez, sem se cruzar.
 // Vale porque o sistema roda num servidor só (uma instância no Render).
 const travas = new Map();
@@ -52,7 +44,7 @@ const chaveSemana = d => `semana:${d.colaboradorId}:${semanaDe(d.data)}`;
 // Despesas lançadas ANTES disso podem já ter sido reembolsadas fora do sistema: não entram sozinhas nos
 // pagamentos; o Maurício decide ("Já foram pagas" ou "Incluir para pagar", que marca LIBERADA).
 let INICIO_PERIODOS = '';
-const anterior = d => !d.periodoId && d.status === STATUS.aprovada && !!d.criadoEm && d.criadoEm < INICIO_PERIODOS;
+const antiga = d => Regras.antiga(d, INICIO_PERIODOS);
 
 for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   if (!process.env[v]) {
@@ -281,7 +273,7 @@ app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
   const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm }]));
   res.json(lista.map(d => {
     const sem = semanaDe(d.data);
-    return { ...publicoDesp(d), periodo: per.get(d.periodoId) || (anterior(d) ? { status: 'Anterior' } : { status: 'Aberta', dataInicial: sem, dataFinal: fimSemana(sem) }) };
+    return { ...publicoDesp(d), periodo: per.get(d.periodoId) || (antiga(d) ? { status: ANTERIOR } : { status: ABERTA, dataInicial: sem, dataFinal: fimSemana(sem) }) };
   }));
 }));
 
@@ -591,7 +583,7 @@ app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
   if (!dataValida(semana) || semanaDe(semana) !== semana) return erro(res, 'Semana inválida.');
   const r = await comTrava(`semana:${c.id}:${semana}`, async () => {
     const notas = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && semanaDe(d.data) === semana
-      && naoPaga(d) && d.status !== STATUS.recusada && !anterior(d));
+      && naoPaga(d) && d.status !== STATUS.recusada && !antiga(d));
     const anal = notas.filter(d => d.status === STATUS.analise).length;
     if (anal) return { erro: `Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise nesta semana. Aprove ou recuse antes de pagar.` };
     if (!notas.length) return { erro: 'Não há despesas aprovadas a pagar nesta semana.' };
@@ -615,7 +607,7 @@ app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
 app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
   const c = await acharColab(req.body.colaboradorId);
   if (!c) return erro(res, 'Escolha o colaborador.');
-  const lista = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && anterior(d));
+  const lista = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && antiga(d));
   if (!lista.length) return erro(res, 'Esse colaborador não tem despesas antigas pendentes.');
   if (!req.body.jaPagas) {
     let n = 0;
@@ -624,7 +616,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
   }
   const datas = lista.map(d => d.data).sort(), agora = new Date().toISOString();
   const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: datas[0], dataFinal: datas[datas.length - 1], status: PAGO,
-    fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: ADMIN_NOME + ' (pago antes do sistema)', valorPago: 0 };
+    fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: `${ADMIN_NOME} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
   await store.add('Periodos', pg);
   let soma = 0, n = 0;
   for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, a => !a.periodoId); if (ok) { soma += ok.valor; n++; } }
@@ -635,7 +627,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
 app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => {
   const pg = await acharPeriodo(req.params.id);
   if (!pg) return erro(res, 'Pagamento não encontrado.', 404);
-  const antesDoSistema = /antes do sistema/.test(pg.pagoPor || '');
+  const antesDoSistema = Regras.antesDoSistema(pg);
   await comTrava(`semana:${pg.colaboradorId}:${pg.dataInicial}`, async () => {
     for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === pg.id)) {
       await store.update('Despesas', d.id, { periodoId: !antesDoSistema && d.criadoEm < INICIO_PERIODOS ? LIBERADA : '' });

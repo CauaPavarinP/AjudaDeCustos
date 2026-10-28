@@ -1,4 +1,5 @@
 // App do colaborador (celular): login, minhas despesas, nova despesa, detalhe e perfil
+const { STATUS, PAGO, PAGA, ABERTA, ANTERIOR } = Regras;
 const $ = id => document.getElementById(id);
 const tela = () => $('screen');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -13,10 +14,11 @@ const VISUAL = {
   'Hotel': ['🏨', '#f3e8ff'], 'Transporte': ['🚌', '#e0f2fe'], 'Outros': ['🧾', '#fef3c7'],
 };
 const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; return `<span class="ic" style="background:${bg}">${e}</span>`; };
-const badge = st => `<span class="badge ${st === 'Paga' ? 'b-blue' : st === 'Aprovada' ? 'b-green' : st === 'Recusada' ? 'b-red' : 'b-amber'}">${esc(st)}</span>`;
+const COR_STATUS = { [PAGA]: 'b-blue', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red' };
+const badge = st => `<span class="badge ${COR_STATUS[st] || 'b-amber'}">${esc(st)}</span>`;
 // Período de pagamento em que a despesa foi enviada (vem do servidor em d.periodo)
-const paga = d => d.status === 'Aprovada' && d.periodo && d.periodo.status === 'Pago';
-const statusVisto = d => (paga(d) ? 'Paga' : d.status);
+const paga = d => d.status === STATUS.aprovada && d.periodo && d.periodo.status === PAGO;
+const statusVisto = d => (paga(d) ? PAGA : d.status);
 const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 // "18/10 a 27/10" (com o ano nas duas pontas quando o intervalo vira o ano: "28/12/2026 a 05/01/2027")
 // Um dia só: "11/10" (em vez de "11/10 a 11/10")
@@ -138,9 +140,9 @@ async function telaInicio(recebidas) {
   const meses = [...new Set([hoje().slice(0, 7), ...despesas.map(d => d.data.slice(0, 7))])].sort().reverse();
   if (mesSel !== 'todas' && !meses.includes(mesSel)) mesSel = hoje().slice(0, 7); // título e seletor sempre no mesmo mês
   const lista = mesSel === 'todas' ? despesas : despesas.filter(d => d.data.startsWith(mesSel));
-  const total = lista.filter(d => d.status !== 'Recusada').reduce((s, d) => s + d.valor, 0); // recusadas não contam
-  const pagas = lista.filter(paga).length, aprov = lista.filter(d => d.status === 'Aprovada').length - pagas;
-  const anal = lista.filter(d => d.status === 'Em análise').length, rec = lista.filter(d => d.status === 'Recusada').length;
+  const total = lista.filter(d => d.status !== STATUS.recusada).reduce((s, d) => s + d.valor, 0); // recusadas não contam
+  const pagas = lista.filter(paga).length, aprov = lista.filter(d => d.status === STATUS.aprovada).length - pagas;
+  const anal = lista.filter(d => d.status === STATUS.analise).length, rec = lista.filter(d => d.status === STATUS.recusada).length;
   const nomeMes = ym => MESES[Number(ym.slice(5)) - 1] + '/' + ym.slice(0, 4);
   mostrar(`
     <div class="m-head">
@@ -251,9 +253,9 @@ function telaEnviada() {
 // Card "A receber": aprovadas ainda não pagas (de todos os meses). O sistema separa por semana sozinho e o
 // Maurício paga cada semana pelo painel; não há nada para o colaborador "fechar".
 function cardPeriodo() {
-  const aberta = d => d.periodo && d.periodo.status === 'Aberta';
-  const aReceber = despesas.filter(d => d.status === 'Aprovada' && aberta(d));
-  const anal = despesas.filter(d => d.status === 'Em análise').length;
+  const aberta = d => d.periodo && d.periodo.status === ABERTA;
+  const aReceber = despesas.filter(d => d.status === STATUS.aprovada && aberta(d));
+  const anal = despesas.filter(d => d.status === STATUS.analise).length;
   if (!aReceber.length && !anal) return '';
   return `<div class="card periodo-card">
     <div class="t">A receber: ${brl(aReceber.reduce((s, d) => s + d.valor, 0))} <span class="s">(todos os meses)</span></div>
@@ -265,14 +267,14 @@ function telaDetalhe(d) {
   telaAtual = 'detalhe'; detalheId = d.id;
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
-  const linha = d.status === 'Aprovada' ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
-    : d.status === 'Recusada' ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
+  const linha = d.status === STATUS.aprovada ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
+    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
-  const linhaPer = !d.periodo || d.status === 'Recusada' ? ''
-    : d.periodo.status === 'Anterior' ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
+  const linhaPer = !d.periodo || d.status === STATUS.recusada ? ''
+    : d.periodo.status === ANTERIOR ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
     : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
-    : d.status === 'Aprovada' ? `<div class="okline gray">Aguardando pagamento · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>` : '';
-  const editavel = d.status === 'Em análise'; // depois de avaliada pelo Maurício, não muda mais
+    : d.status === STATUS.aprovada ? `<div class="okline gray">Aguardando pagamento · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>` : '';
+  const editavel = d.status === STATUS.analise; // depois de avaliada pelo Maurício, não muda mais
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
