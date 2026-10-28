@@ -141,60 +141,56 @@ test('colaborador: dados bancários (opcionais) vão para o painel, não para o 
   assert.equal((await a.post('/api/admin/colaboradores', { nome: 'CPF Errado', usuario: usuario + 'x', funcao: 'Vendedor', cpf: '123.456.789-00' })).status, 400);
 });
 
-test('períodos: colaborador fecha, notas travam, pagar exige análise, despesa paga não muda', async () => {
+test('pagamentos por semana: separa sozinho, exige análise, despesa paga não muda, nota atrasada fica a pagar', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);
-  const d1 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 100 })).dados;
-  const d2 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Alimentação', valor: 50 })).dados;
-  const rec = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 7 })).dados;
-  assert.equal((await a.post(`/api/admin/despesas/${rec.id}/recusar`)).status, 200);
-  const f = await c.post('/api/periodos/fechar');
-  assert.equal(f.status, 201, JSON.stringify(f.dados));
-  assert.equal(f.dados.notas, 2); // a recusada fica de fora
-  const per = f.dados.periodo;
-  assert.equal(per.dataInicial, ontem());
-  assert.equal((await c.post('/api/periodos/fechar')).status, 400); // nada novo para enviar
-  assert.equal((await c.del('/api/despesas/' + d1.id)).status, 400); // travada
+  const nova = async (data, valor) => (await c.post('/api/despesas', { data, categoria: 'Hotel', valor })).dados;
+  const d1 = await nova('2026-10-06', 100); // semana de 05/10 (segunda) a 11/10
+  const d2 = await nova('2026-10-11', 50);  // mesma semana (domingo)
+  const d3 = await nova('2026-10-12', 30);  // semana seguinte
   const minhas = (await c.get('/api/despesas')).dados;
-  assert.equal(minhas.find(x => x.id === d1.id).periodo.status, 'Enviado');
-  // nova despesa fica para o próximo período
-  const d3 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 30 })).dados;
-  assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d3.id).periodoId);
-  // pagar com nota em análise é recusado
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 400);
+  assert.deepEqual([minhas.find(x => x.id === d2.id).periodo.dataInicial, minhas.find(x => x.id === d3.id).periodo.dataInicial], ['2026-10-05', '2026-10-12']);
+  const pagar = semana => a.post('/api/admin/pagamentos', { colaboradorId: id, semana });
+  assert.equal((await pagar('2026-10-05')).status, 400); // ainda em análise
+  assert.equal((await pagar('2026-10-07')).status, 400); // não é início de semana
   await a.post(`/api/admin/despesas/${d1.id}/aprovar`);
   await a.post(`/api/admin/despesas/${d2.id}/recusar`);
-  const pago = await a.post(`/api/admin/periodos/${per.id}/pagar`);
-  assert.equal(pago.status, 200, JSON.stringify(pago.dados));
-  assert.equal(pago.dados.valorPago, 100);
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 409); // já pago
-  assert.equal((await a.post(`/api/admin/despesas/${d1.id}/reabrir`)).status, 400); // despesa de período pago não muda
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 409); // pago não reabre
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/desfazer-pagamento`)).status, 200);
-  assert.equal((await a.post(`/api/admin/periodos/${per.id}/reabrir`)).status, 200);
-  assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d1.id).periodoId); // voltou a "não enviada"
-  // o Maurício também fecha pelo colaborador
-  const fa = await a.post('/api/admin/periodos/fechar', { colaboradorId: id });
-  assert.equal(fa.status, 201);
-  assert.equal(fa.dados.notas, 2); // d1 (aprovada) e d3; d2 foi recusada
+  const pg = await pagar('2026-10-05');
+  assert.equal(pg.status, 201, JSON.stringify(pg.dados));
+  assert.equal(pg.dados.pagamento.valorPago, 100); // só a aprovada; a recusada fica de fora; a da outra semana também
+  assert.equal(pg.dados.pagamento.dataFinal, '2026-10-11');
+  assert.equal((await pagar('2026-10-05')).status, 400); // nada mais a pagar nessa semana
+  assert.equal((await a.post(`/api/admin/despesas/${d1.id}/reabrir`)).status, 400); // paga: não muda
+  assert.equal((await c.get('/api/despesas')).dados.find(x => x.id === d1.id).periodo.status, 'Pago');
+  // nota atrasada da semana já paga: fica a pagar, num pagamento à parte
+  const d4 = await nova('2026-10-08', 7);
+  await a.post(`/api/admin/despesas/${d4.id}/aprovar`);
+  const pg2 = await pagar('2026-10-05');
+  assert.equal(pg2.status, 201);
+  assert.equal(pg2.dados.pagamento.valorPago, 7);
+  // desfazer o primeiro pagamento: a despesa volta a "não paga"
+  assert.equal((await a.post(`/api/admin/periodos/${pg.dados.pagamento.id}/desfazer-pagamento`)).status, 200);
+  assert.ok(!(await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d1.id).periodoId);
+  assert.equal((await pagar('2026-10-12')).status, 400); // d3 ainda em análise
 });
 
-test('períodos: pagar e reabrir ao mesmo tempo não deixam os dois darem certo', async () => {
+test('pagamentos: aprovar e pagar ao mesmo tempo não deixam nota em análise dentro do pagamento', async () => {
   const a = await adminLogado();
-  const { c } = await novoColaborador(a);
-  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
-  await a.post(`/api/admin/despesas/${d.id}/aprovar`);
-  const per = (await c.post('/api/periodos/fechar')).dados.periodo;
-  const [pg, ra] = await Promise.all([a.post(`/api/admin/periodos/${per.id}/pagar`), a.post(`/api/admin/periodos/${per.id}/reabrir`)]);
-  assert.equal([pg.status, ra.status].filter(s => s === 200).length, 1, `pagar ${pg.status} · reabrir ${ra.status}`);
+  const { c, id } = await novoColaborador(a);
+  const d1 = (await c.post('/api/despesas', { data: '2026-10-13', categoria: 'Hotel', valor: 10 })).dados;
+  const x = (await c.post('/api/despesas', { data: '2026-10-14', categoria: 'Hotel', valor: 7 })).dados;
+  await a.post(`/api/admin/despesas/${d1.id}/aprovar`);
+  const [, pg] = await Promise.all([a.post(`/api/admin/despesas/${x.id}/aprovar`), a.post('/api/admin/pagamentos', { colaboradorId: id, semana: '2026-10-12' })]);
   const dados = (await a.get('/api/admin/dados')).dados;
-  const p = dados.periodos.find(x => x.id === per.id), desp = dados.despesas.find(x => x.id === d.id);
-  if (pg.status === 200) assert.ok(p && p.status === 'Pago' && desp.periodoId === per.id); // pagou: período e nota continuam juntos
-  else assert.ok(!p && !desp.periodoId); // reabriu: período some e a nota volta a "não enviada"
+  if (pg.status === 201) {
+    const notas = dados.despesas.filter(z => z.periodoId === pg.dados.pagamento.id);
+    assert.ok(notas.every(z => z.status === 'Aprovada'));
+    assert.equal(pg.dados.pagamento.valorPago, notas.reduce((s2, z) => s2 + z.valor, 0));
+  } else assert.equal(pg.status, 400); // pagou antes da aprovação: recusado por ter nota em análise
 });
 
-// Servidor separado com o início do controle de pagamentos no futuro: tudo o que for aprovado conta como "antigo"
-test('períodos: despesas aprovadas antes do controle não entram sozinhas; o Maurício decide', async () => {
+// Servidor separado com o início do controle de pagamentos no futuro: tudo o que for lançado conta como "antigo"
+test('pagamentos: despesas lançadas antes do controle não entram sozinhas; o Maurício decide', async () => {
   const porta = PORTA + 100, b2 = `http://localhost:${porta}`;
   const env = { ...process.env, PORT: String(porta), NODE_ENV: '', SPREADSHEET_ID: '', GOOGLE_SERVICE_ACCOUNT_EMAIL: '', GOOGLE_PRIVATE_KEY: '',
     CLOUDINARY_URL: '', SESSION_SECRET: '', ADMIN_USER: '', ADMIN_PASSWORD: '', ADMIN_NOME: '', INICIO_PERIODOS: '2999-01-01T00:00:00.000Z' };
@@ -205,29 +201,20 @@ test('períodos: despesas aprovadas antes do controle não entram sozinhas; o Ma
     await a.post('/api/admin/login', { usuario: 'admin', senha: 'admin' });
     const col = (await a.post('/api/admin/colaboradores', { nome: 'Antigo Teste', usuario: 'antigo.teste', funcao: 'Vendedor' })).dados;
     await c.post('/api/login', { usuario: 'antigo.teste', senha: col.senhaTemporaria });
-    const d1 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 40 })).dados;
-    const d2 = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 2 })).dados;
-    await a.post(`/api/admin/despesas/${d1.id}/aprovar`); // aprovada "antes" do controle
-    const f = await c.post('/api/periodos/fechar');
-    assert.equal(f.dados.notas, 1); // só a d2 (em análise) entra; a antiga não
+    const d1 = (await c.post('/api/despesas', { data: '2026-10-06', categoria: 'Hotel', valor: 40 })).dados;
+    await a.post(`/api/admin/despesas/${d1.id}/aprovar`);
     assert.equal((await c.get('/api/despesas')).dados.find(x => x.id === d1.id).periodo.status, 'Anterior');
+    assert.equal((await a.post('/api/admin/pagamentos', { colaboradorId: col.id, semana: '2026-10-05' })).status, 400); // antiga não entra sozinha
     const pagas = await a.post('/api/admin/periodos/antigas', { colaboradorId: col.id, jaPagas: true });
     assert.equal(pagas.status, 201, JSON.stringify(pagas.dados));
-    assert.equal(pagas.dados.periodo.status, 'Pago');
-    assert.equal(pagas.dados.periodo.valorPago, 40);
-    assert.equal((await a.post('/api/admin/periodos/antigas', { colaboradorId: col.id })).status, 400); // nada mais pendente
+    assert.equal(pagas.dados.pagamento.valorPago, 40);
+    // desfazer o "pago antes do sistema" devolve para as antigas; "Incluir para pagar" libera para a semana
+    await a.post(`/api/admin/periodos/${pagas.dados.pagamento.id}/desfazer-pagamento`);
+    assert.equal((await a.post('/api/admin/periodos/antigas', { colaboradorId: col.id })).status, 201);
+    const pg = await a.post('/api/admin/pagamentos', { colaboradorId: col.id, semana: '2026-10-05' });
+    assert.equal(pg.status, 201, JSON.stringify(pg.dados));
+    assert.equal(pg.dados.pagamento.valorPago, 40);
   } finally { srv.kill(); }
-});
-
-test('períodos: período sem nenhuma despesa aprovada não pode ser pago', async () => {
-  const a = await adminLogado();
-  const { c } = await novoColaborador(a);
-  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
-  const per = (await c.post('/api/periodos/fechar')).dados.periodo;
-  await a.post(`/api/admin/despesas/${d.id}/recusar`);
-  const r = await a.post(`/api/admin/periodos/${per.id}/pagar`);
-  assert.equal(r.status, 400, JSON.stringify(r.dados));
-  assert.equal((await a.get('/api/admin/dados')).dados.periodos.find(x => x.id === per.id).status, 'Enviado'); // volta ao normal
 });
 
 test('despesa: validações', async () => {

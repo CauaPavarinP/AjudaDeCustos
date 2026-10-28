@@ -23,7 +23,7 @@ const F = {            // filtros de cada tela (ficam guardados ao trocar de tel
   c: { colab: '', ano: hoje().slice(0, 4), mes: '' }, // mes '' = o ano inteiro
   f: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '' },
   d: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), colab: '', busca: '', status: '' },
-  p: { colab: '', status: 'Enviado' }, // pagamentos: começa mostrando o que falta pagar
+  p: { colab: '', status: 'Enviado' }, // pagamentos: começa mostrando as semanas aguardando pagamento
 };
 
 // Versão nova no servidor (deploy): a página se recarrega sozinha no próximo momento seguro
@@ -70,7 +70,7 @@ async function carregar() {
   $('nav-pend').textContent = pend;
   $('nav-pend').classList.toggle('hidden', !pend);
   D.periodos = D.periodos || [];
-  const aPagar = D.periodos.filter(p => p.status !== 'Pago').length;
+  const aPagar = linhasPagamento().filter(l => l.tipo === 'aberta' && somaAprov(l.notas) > 0).length; // semanas com aprovadas a pagar
   $('nav-pag').textContent = aPagar;
   $('nav-pag').classList.toggle('hidden', !aPagar);
 }
@@ -358,7 +358,7 @@ const confirmarDesfazer = d => confirmar(
 // Todas as despesas enviadas pelo app, com filtro por status (inclui as recusadas, que não aparecem nos Lançamentos)
 const STATUS_COR = { 'Em análise': 'b-amber', Aprovada: 'b-green', Recusada: 'b-red' };
 const periodoDaDespesa = d => d.periodoId && (D.periodos || []).find(p => p.id === d.periodoId);
-const periodoTravado = d => { const p = periodoDaDespesa(d); return !!p && (p.status === 'Pago' || p.status === 'Pagando'); };
+const periodoTravado = d => !!periodoDaDespesa(d); // despesa paga (ligada a um pagamento): não muda mais
 // Status como aparece nas telas e no Excel: "Paga" quando o período foi pago
 const statusVisto = d => (d.status === 'Aprovada' && (periodoDaDespesa(d) || {}).status === 'Pago' ? 'Paga' : d.status);
 function telaDespesas() {
@@ -433,7 +433,7 @@ function telaDespesas() {
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
     [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
     [...rows.map(d => { const p = periodoDaDespesa(d); return [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, statusVisto(d), quando(d.avaliadoEm),
-      p ? `${rotPeriodo(p)}${p.status === 'Pago' ? ' · pago em ' + diaBR(p.pagoEm) : ' · aguardando pagamento'}` : '', d.foto ? 'Sim' : 'Não']; }),
+      p ? `${rotPeriodo(p)} · pago em ${diaBR(p.pagoEm)}` : d.status === 'Aprovada' && !antiga(d) ? `semana ${rotPeriodo({ dataInicial: semanaDe(d.data), dataFinal: fimSemana(semanaDe(d.data)) })} · aguardando pagamento` : '', d.foto ? 'Sim' : 'Não']; }),
       ['Total', '', '', '', soma(rows), '', '', '', '', '']]));
 }
 
@@ -788,24 +788,38 @@ function pdfFolhas(colab, folhas, nomeArquivo) {
   doc.baixar(nomeArquivo);
 }
 
-// ---------- pagamentos (períodos enviados pelos colaboradores) ----------
-// Um período junta as despesas do celular que o colaborador (ou o Maurício) "fechou e enviou".
-// Status: Enviado (aguardando pagamento) → Pago. Pagar só depois de analisar todas as notas do período.
-const notasDo = p => D.despesas.filter(d => d.periodoId === p.id).sort((a, b) => a.data.localeCompare(b.data));
+// ---------- pagamentos por semana ----------
+// O sistema separa sozinho as despesas do celular por colaborador e semana (segunda a domingo, pela data
+// da nota). Cada linha "Aguardando pagamento" é uma semana com despesas ainda não pagas; ao pagar, o servidor
+// grava um registro de pagamento (D.periodos) e as despesas pagas ficam ligadas a ele (periodoId).
+const LIBERADA = 'liberada'; // despesa antiga que o Maurício mandou incluir nos pagamentos (mesmo nome do servidor)
+const naoPaga = d => !d.periodoId || d.periodoId === LIBERADA;
+const semanaDe = data => { const d = new Date(data + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
+const fimSemana = ini => { const d = new Date(ini + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); };
 const somaAprov = l => r2(l.filter(d => d.status === 'Aprovada').reduce((s, d) => s + d.valor, 0));
 const antesDoSistema = p => /antes do sistema/.test(p.pagoPor || ''); // marcado como "Já foram pagas" (pago fora do sistema)
 const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
-// Despesa aprovada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
-const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.criadoEm && !!D.inicioPeriodos && d.criadoEm < D.inicioPeriodos; // mesma regra do servidor (data de lançamento)
-const naoEnviadas = colabId => D.despesas.filter(d => !d.periodoId && d.status !== 'Recusada' && !antiga(d) && (!colabId || d.colaboradorId === colabId));
-// Card do topo de Pagamentos: despesas antigas por colaborador, para o Maurício decidir o que fazer com elas
+// Despesa lançada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
+const antiga = d => !d.periodoId && d.status === 'Aprovada' && !!d.criadoEm && !!D.inicioPeriodos && d.criadoEm < D.inicioPeriodos; // mesma regra do servidor
+// Linhas da tela: semanas com despesas a pagar (calculadas aqui) + pagamentos já feitos (do servidor)
+function linhasPagamento() {
+  const abertas = new Map();
+  for (const d of D.despesas.filter(x => naoPaga(x) && x.status !== 'Recusada' && !antiga(x))) {
+    const sem = semanaDe(d.data), k = d.colaboradorId + '|' + sem;
+    if (!abertas.has(k)) abertas.set(k, { id: k, tipo: 'aberta', colaboradorId: d.colaboradorId, colaborador: d.colaborador, dataInicial: sem, dataFinal: fimSemana(sem), notas: [] });
+    abertas.get(k).notas.push(d);
+  }
+  const pagas = (D.periodos || []).map(p => ({ ...p, tipo: 'pago', notas: D.despesas.filter(d => d.periodoId === p.id) }));
+  return [...abertas.values(), ...pagas].map(l => ({ ...l, notas: l.notas.sort((a, b) => a.data.localeCompare(b.data)) }))
+    .sort((a, b) => (b.dataInicial + b.tipo).localeCompare(a.dataInicial + a.tipo));
+}
 function blocoAntigas() {
   const por = new Map();
   for (const d of D.despesas.filter(antiga)) { const g = por.get(d.colaboradorId) || []; g.push(d); por.set(d.colaboradorId, g); }
   if (!por.size) return '';
   return `<div class="card pend"><h3>Despesas aprovadas antes do controle de pagamentos</h3>
-    <span class="muted small">Elas não entram sozinhas em nenhum período, porque podem já ter sido reembolsadas antes de o sistema controlar os pagamentos. Decida por colaborador:</span>
+    <span class="muted small">Elas não entram sozinhas nos pagamentos por semana, porque podem já ter sido reembolsadas antes de o sistema controlar os pagamentos. Decida por colaborador:</span>
     ${[...por].map(([id, l]) => { const ds = l.map(d => d.data).sort(), nome = (D.colaboradores.find(c => c.id === id) || l[0]).nome || l[0].colaborador; return `<div class="pend-row antigas-row">
       <span><b>${esc(nome)}</b><br><span class="muted small">${l.length} despesa${l.length === 1 ? '' : 's'} · ${dm(ds[0])} a ${dmy(ds[ds.length - 1])}</span></span>
       <span class="num"><b>${brl(l.reduce((s, d) => s + d.valor, 0))}</b></span>
@@ -814,132 +828,107 @@ function blocoAntigas() {
 }
 function telaPagamentos() {
   const f = F.p;
-  const todos = [...D.periodos].sort((a, b) => (b.dataFinal + b.fechadoEm).localeCompare(a.dataFinal + a.fechadoEm));
-  const doColab = todos.filter(p => !f.colab || p.colaboradorId === f.colab);
-  const rows = doColab.filter(p => !f.status || (f.status === 'Pago' ? p.status === 'Pago' : p.status !== 'Pago'));
-  const aguardando = doColab.filter(p => p.status !== 'Pago'); // Enviado (e os estados de passagem Pagando/Reabrindo)
+  const todas = linhasPagamento().filter(l => !f.colab || l.colaboradorId === f.colab);
+  const rows = todas.filter(l => !f.status || (f.status === 'Pago' ? l.tipo === 'pago' : l.tipo === 'aberta'));
+  const aguardando = todas.filter(l => l.tipo === 'aberta');
   const mesAtual = hoje().slice(0, 7);
-  const pagosMes = doColab.filter(p => p.status === 'Pago' && !antesDoSistema(p) && diaBR(p.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
-  const pend = naoEnviadas(f.colab);
+  const pagosMes = todas.filter(l => l.tipo === 'pago' && !antesDoSistema(l) && diaBR(l.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
+  const anal = aguardando.reduce((s, l) => s + l.notas.filter(d => d.status === 'Em análise').length, 0);
   const chip = (st, rot, n) => `<button class="chip sm${f.status === st ? ' on' : ''}" data-st="${esc(st)}">${esc(rot)} (${n})</button>`;
   $('page').innerHTML = `
-    <div class="page-head"><div><h1>Pagamentos</h1><p>Períodos enviados pelos colaboradores: confira, exporte o PDF e marque como pago</p></div>
-      <div class="acts"><button class="btn secondary" id="p-fechar">Fechar período por um colaborador</button></div></div>
+    <div class="page-head"><div><h1>Pagamentos</h1><p>As despesas do celular são separadas sozinhas por semana (segunda a domingo). Confira, exporte o PDF e marque como pago.</p></div></div>
     ${blocoAntigas()}
     <div class="card filters" style="grid-template-columns:1fr 2fr">
       <div class="field"><label>Colaborador</label><select class="input" id="p-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
-      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', doColab.length)}${chip('Enviado', 'Aguardando pagamento', aguardando.length)}${chip('Pago', 'Pagos', doColab.length - aguardando.length)}</div></div>
+      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', todas.length)}${chip('Enviado', 'Aguardando pagamento', aguardando.length)}${chip('Pago', 'Pagos', todas.length - aguardando.length)}</div></div>
     </div>
     <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
-      <div class="card kpi"><span class="l">Aguardando pagamento</span><span class="v">${brl(aguardando.reduce((s, p) => s + somaAprov(notasDo(p)), 0))}</span><span class="muted small">${aguardando.length} período${aguardando.length === 1 ? '' : 's'} (só as aprovadas)</span></div>
-      <div class="card kpi"><span class="l">Pago em ${MESES[Number(mesAtual.slice(5)) - 1].toLowerCase()}</span><span class="v">${brl(pagosMes.reduce((s, p) => s + p.valorPago, 0))}</span><span class="muted small">${pagosMes.length} período${pagosMes.length === 1 ? '' : 's'}</span></div>
-      <div class="card kpi"><span class="l">Ainda não enviadas pelo colaborador</span><span class="v">${brl(pend.reduce((s, d) => s + d.valor, 0))}</span><span class="muted small">${pend.length} despesa${pend.length === 1 ? '' : 's'}</span></div>
+      <div class="card kpi"><span class="l">Aguardando pagamento</span><span class="v">${brl(aguardando.reduce((s, l) => s + somaAprov(l.notas), 0))}</span><span class="muted small">${aguardando.length} semana${aguardando.length === 1 ? '' : 's'} (só as aprovadas)</span></div>
+      <div class="card kpi"><span class="l">Pago em ${MESES[Number(mesAtual.slice(5)) - 1].toLowerCase()}</span><span class="v">${brl(pagosMes.reduce((s, l) => s + l.valorPago, 0))}</span><span class="muted small">${pagosMes.length} pagamento${pagosMes.length === 1 ? '' : 's'}</span></div>
+      <div class="card kpi"><span class="l">Em análise nas semanas a pagar</span><span class="v">${anal}</span><span class="muted small">despesa${anal === 1 ? '' : 's'} para aprovar ou recusar antes de pagar</span></div>
     </div>
     <div class="card table-card"><div class="table-wrap"><table>
-      <thead><tr><th>Colaborador</th><th>Período</th><th>Notas</th><th class="num">Valor aprovado</th><th>Status</th><th>Ações</th></tr></thead>
-      <tbody>${rows.map(p => {
-        const notas = notasDo(p), anal = notas.filter(d => d.status === 'Em análise').length, colab = D.colaboradores.find(c => c.id === p.colaboradorId);
+      <thead><tr><th>Colaborador</th><th>Semana</th><th>Notas</th><th class="num">Valor aprovado</th><th>Status</th><th>Ações</th></tr></thead>
+      <tbody>${rows.map(l => {
+        const na = l.notas.filter(d => d.status === 'Em análise').length, colab = D.colaboradores.find(c => c.id === l.colaboradorId);
+        const pago = l.tipo === 'pago';
         return `<tr>
-        <td class="b">${esc(p.colaborador)}</td>
-        <td>${rotPeriodo(p)}<br><span class="muted small">enviado em ${diaBR(p.fechadoEm)}${p.fechadoPor && p.fechadoPor !== p.colaborador ? ' por ' + esc(p.fechadoPor) : ''}</span></td>
-        <td>${notas.length}${anal ? `<br><span class="badge b-amber">${anal} em análise</span>` : ''}</td>
-        <td class="num b">${fmt(p.status === 'Pago' ? p.valorPago : somaAprov(notas))}</td>
-        <td>${p.status === 'Pago' ? `<span class="badge b-blue">Pago em ${diaBR(p.pagoEm).slice(0, 5)}</span>${antesDoSistema(p) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
-          : p.status === 'Enviado' ? '<span class="badge b-amber">Aguardando pagamento</span>'
-          : `<span class="badge b-gray">${p.status === 'Pagando' ? 'Pagamento em andamento' : 'Reabertura em andamento'}</span><br><span class="muted small">se ficar parado, use o botão ao lado</span>`}</td>
+        <td class="b">${esc(l.colaborador)}</td>
+        <td>${rotPeriodo(l)}${pago && !antesDoSistema(l) && (D.periodos || []).some(o => o.id !== l.id && o.colaboradorId === l.colaboradorId && o.dataInicial === l.dataInicial) ? '<br><span class="muted small">pagamento separado (nota lançada depois)</span>' : ''}</td>
+        <td>${l.notas.length}${na ? `<br><span class="badge b-amber">${na} em análise</span>` : ''}</td>
+        <td class="num b">${fmt(pago ? l.valorPago : somaAprov(l.notas))}</td>
+        <td>${pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}` : '<span class="badge b-amber">Aguardando pagamento</span>'}</td>
         <td><span class="chips">
-          <button class="btn xs" data-ver="${esc(p.id)}">Ver notas</button>
-          <button class="btn xs" data-pdf="${esc(p.id)}">PDF</button>
+          <button class="btn xs" data-ver="${esc(l.id)}">Ver notas</button>
+          <button class="btn xs" data-pdf="${esc(l.id)}">PDF</button>
           ${colab && colab.pix ? `<button class="btn xs" data-pix="${esc(colab.pix)}" title="Copiar a chave PIX de ${esc(colab.nome)}">📋 PIX</button>` : ''}
-          ${p.status === 'Pago' || p.status === 'Pagando'
-          ? `<button class="btn xs" data-despagar="${esc(p.id)}">Desfazer pagamento</button>`
-          : p.status === 'Reabrindo' ? `<button class="btn xs" data-reabrir="${esc(p.id)}">Reabrir</button>`
-          : `<button class="btn xs ok" data-pagar="${esc(p.id)}">✔ Pagar</button><button class="btn xs" data-reabrir="${esc(p.id)}">Reabrir</button>`}
+          ${pago ? `<button class="btn xs" data-despagar="${esc(l.id)}">Desfazer pagamento</button>` : `<button class="btn xs ok" data-pagar="${esc(l.id)}">✔ Pagar</button>`}
         </span></td></tr>`;
-      }).join('') || '<tr class="empty-row"><td colspan="6">Nenhum período enviado ainda. Os colaboradores enviam pelo app ("Fechar período e enviar").</td></tr>'}</tbody>
+      }).join('') || '<tr class="empty-row"><td colspan="6">Nenhuma despesa do celular para pagar ou paga ainda.</td></tr>'}</tbody>
     </table></div></div>
-    <p class="muted small">"Reabrir" desfaz o envio: as despesas voltam a ficar "não enviadas" e o colaborador pode fechar de novo. Só dá para pagar depois de aprovar ou recusar todas as notas do período.</p>`;
+    <p class="muted small">Uma nota lançada depois que a semana foi paga aparece numa nova linha da mesma semana, para ser paga à parte. Só dá para pagar depois de aprovar ou recusar todas as notas da semana.</p>`;
 
-  const acha = id => D.periodos.find(p => p.id === id);
-  const acao = (url, sucesso) => async () => { try { await post(url); await carregar(); telaPagamentos(); if (sucesso) avisar(sucesso, 'Pronto'); } catch (e) { await carregar(); telaPagamentos(); avisar(e.message, 'Não foi possível concluir'); } };
+  const acha = id => linhasPagamento().find(l => l.id === id);
+  const nomeDe = id => (D.colaboradores.find(c => c.id === id) || {}).nome || 'o colaborador';
+  const acao = (url, corpo) => async () => { try { await post(url, corpo); await carregar(); telaPagamentos(); } catch (e) { await carregar(); telaPagamentos(); avisar(e.message, 'Não foi possível concluir'); } };
   $('p-colab').onchange = e => { f.colab = e.target.value; telaPagamentos(); };
   document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; telaPagamentos(); });
-  $('p-fechar').onclick = modalFecharPeriodo;
-  const nomeDe = id => (D.colaboradores.find(c => c.id === id) || {}).nome || 'o colaborador';
   document.querySelectorAll('[data-ant-pagas]').forEach(b => b.onclick = async () => {
     const id = b.dataset.antPagas;
-    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} viram um período marcado como "pago antes do sistema". Elas não serão pagas de novo.`, { titulo: 'Marcar como já pagas?', ok: 'Já foram pagas' }))) return;
-    try { await post('/api/admin/periodos/antigas', { colaboradorId: id, jaPagas: true }); await carregar(); telaPagamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
+    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} viram um pagamento marcado como "pago antes do sistema". Elas não serão pagas de novo.`, { titulo: 'Marcar como já pagas?', ok: 'Já foram pagas' }))) return;
+    acao('/api/admin/periodos/antigas', { colaboradorId: id, jaPagas: true })();
   });
   document.querySelectorAll('[data-ant-incluir]').forEach(b => b.onclick = async () => {
     const id = b.dataset.antIncluir;
-    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} viram um período "Aguardando pagamento", para você pagar agora.`, { titulo: 'Incluir para pagar?', ok: 'Incluir para pagar' }))) return;
-    try { await post('/api/admin/periodos/antigas', { colaboradorId: id }); await carregar(); telaPagamentos(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
+    if (!(await confirmar(`As despesas antigas de ${nomeDe(id)} entram nas semanas delas, como "Aguardando pagamento", para você pagar.`, { titulo: 'Incluir para pagar?', ok: 'Incluir para pagar' }))) return;
+    acao('/api/admin/periodos/antigas', { colaboradorId: id })();
   });
-  document.querySelectorAll('[data-ver]').forEach(b => b.onclick = () => modalPeriodo(acha(b.dataset.ver)));
+  document.querySelectorAll('[data-ver]').forEach(b => b.onclick = () => modalPeriodo(b.dataset.ver));
   document.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => pdfPeriodo(acha(b.dataset.pdf)));
   document.querySelectorAll('[data-pix]').forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.pix); b.textContent = '✔ Copiado'; setTimeout(() => { b.textContent = '📋 PIX'; }, 1500); }
     catch { avisar('Chave PIX: ' + b.dataset.pix, 'Copie a chave'); }
   });
   document.querySelectorAll('[data-pagar]').forEach(b => b.onclick = async () => {
-    const p = acha(b.dataset.pagar), notas = notasDo(p), anal = notas.filter(d => d.status === 'Em análise').length;
-    if (anal) return avisar(`Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise neste período. Clique em "Ver notas" para aprovar ou recusar antes de pagar.`, 'Falta analisar');
-    if (!somaAprov(notas)) return avisar('Este período não tem nenhuma despesa aprovada: não há o que pagar. Use "Reabrir" para desfazer o período.', 'Nada para pagar');
-    if (!(await confirmar(`${p.colaborador} · período ${rotPeriodo(p)}\nValor: ${brl(somaAprov(notas))} (despesas aprovadas)\n\nO colaborador verá "Paga" nessas despesas. Elas não poderão mais ser alteradas, a não ser que você desfaça o pagamento.`, { titulo: 'Marcar como pago?', ok: 'Marcar como pago' }))) return;
-    acao('/api/admin/periodos/' + encodeURIComponent(p.id) + '/pagar')();
+    const l = acha(b.dataset.pagar), na = l.notas.filter(d => d.status === 'Em análise').length;
+    if (na) return avisar(`Ainda há ${na} despesa${na > 1 ? 's' : ''} em análise nesta semana. Clique em "Ver notas" para aprovar ou recusar antes de pagar.`, 'Falta analisar');
+    if (!somaAprov(l.notas)) return avisar('Esta semana não tem nenhuma despesa aprovada: não há o que pagar.', 'Nada para pagar');
+    if (!(await confirmar(`${l.colaborador} · semana ${rotPeriodo(l)}\nValor: ${brl(somaAprov(l.notas))} (despesas aprovadas)\n\nO colaborador verá "Paga" nessas despesas. Elas não poderão mais ser alteradas, a não ser que você desfaça o pagamento.`, { titulo: 'Marcar como pago?', ok: 'Marcar como pago' }))) return;
+    acao('/api/admin/pagamentos', { colaboradorId: l.colaboradorId, semana: l.dataInicial })();
   });
   document.querySelectorAll('[data-despagar]').forEach(b => b.onclick = async () => {
-    const p = acha(b.dataset.despagar);
-    const msg = antesDoSistema(p) ? `As despesas do período ${rotPeriodo(p)} de ${p.colaborador} voltam para a caixa "Despesas aprovadas antes do controle de pagamentos", para você decidir de novo.`
-      : `O período ${rotPeriodo(p)} de ${p.colaborador} volta para "Aguardando pagamento".`;
+    const l = acha(b.dataset.despagar);
+    const msg = antesDoSistema(l) ? `As despesas de ${l.colaborador} (${rotPeriodo(l)}) voltam para a caixa "Despesas aprovadas antes do controle de pagamentos", para você decidir de novo.`
+      : `As despesas da semana ${rotPeriodo(l)} de ${l.colaborador} voltam para "Aguardando pagamento".`;
     if (!(await confirmar(msg, { titulo: 'Desfazer pagamento?', ok: 'Desfazer', perigo: true }))) return;
-    acao('/api/admin/periodos/' + encodeURIComponent(p.id) + '/desfazer-pagamento')();
-  });
-  document.querySelectorAll('[data-reabrir]').forEach(b => b.onclick = async () => {
-    const p = acha(b.dataset.reabrir);
-    if (!(await confirmar(`As despesas do período ${rotPeriodo(p)} de ${p.colaborador} voltam a ficar "não enviadas". O colaborador (ou você) pode fechar o período de novo.`, { titulo: 'Reabrir período?', ok: 'Reabrir', perigo: true }))) return;
-    acao('/api/admin/periodos/' + encodeURIComponent(p.id) + '/reabrir')();
+    acao('/api/admin/periodos/' + encodeURIComponent(l.id) + '/desfazer-pagamento')();
   });
 }
-// Notas do período: clicar abre a nota (com Aprovar/Recusar) e "Voltar" retorna para esta lista
-function modalPeriodo(p) {
-  const notas = notasDo(p);
-  const m = abrirModal(`<h3>${esc(p.colaborador)} · ${rotPeriodo(p)}</h3>
-    <span class="muted small">${notas.length} nota${notas.length === 1 ? '' : 's'} · aprovado ${brl(somaAprov(notas))}${p.status === 'Pago' ? ` · pago em ${diaBR(p.pagoEm)}` : ''}</span>
-    <div class="rows card">${notas.map(d => `<div data-nota="${esc(d.id)}" style="cursor:pointer"><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}<br><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span></span><span class="valor">${brl(d.valor)}</span></div>`).join('') || '<div><span class="muted">Nenhuma nota.</span></div>'}</div>
-    <span class="muted small">${p.status === 'Pago' ? 'Período pago: clique numa nota para ver a foto.' : 'Clique numa nota para ver a foto e aprovar ou recusar.'}</span>
+// Notas da linha (semana a pagar ou pagamento feito): clicar abre a nota; depois de aprovar/recusar volta para cá
+function modalPeriodo(id) {
+  const l = linhasPagamento().find(x => x.id === id);
+  if (!l) { fecharModal(); return telaPagamentos(); } // a semana não tem mais nada a pagar (ex.: única nota recusada)
+  const pago = l.tipo === 'pago';
+  const m = abrirModal(`<h3>${esc(l.colaborador)} · ${rotPeriodo(l)}</h3>
+    <span class="muted small">${l.notas.length} nota${l.notas.length === 1 ? '' : 's'} · ${pago ? `pago ${brl(l.valorPago)} em ${diaBR(l.pagoEm)}` : `aprovado ${brl(somaAprov(l.notas))}`}</span>
+    <div class="rows card">${l.notas.map(d => `<div data-nota="${esc(d.id)}" style="cursor:pointer"><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}<br><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span></span><span class="valor">${brl(d.valor)}</span></div>`).join('') || '<div><span class="muted">Nenhuma nota.</span></div>'}</div>
+    <span class="muted small">${pago ? 'Pago: clique numa nota para ver a foto.' : 'Clique numa nota para ver a foto e aprovar ou recusar.'}</span>
     <div class="acts"><button class="btn" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = () => { fecharModal(); telaPagamentos(); };
-  m.querySelectorAll('[data-nota]').forEach(el => el.onclick = () => modalNota(D.despesas.find(d => d.id === el.dataset.nota), () => modalPeriodo(D.periodos.find(x => x.id === p.id) || p), true));
+  m.querySelectorAll('[data-nota]').forEach(el => el.onclick = () => modalNota(D.despesas.find(d => d.id === el.dataset.nota), () => modalPeriodo(id), true));
 }
-function pdfPeriodo(p) {
-  const colab = D.colaboradores.find(c => c.id === p.colaboradorId) || { nome: p.colaborador };
-  const notas = notasDo(p), aprov = notas.filter(d => d.status === 'Aprovada'), anal = notas.filter(d => d.status === 'Em análise').length;
-  if (!aprov.length) return avisar('Este período ainda não tem despesas aprovadas.', 'Nada para exportar');
+function pdfPeriodo(l) {
+  const colab = D.colaboradores.find(c => c.id === l.colaboradorId) || { nome: l.colaborador };
+  const aprov = l.notas.filter(d => d.status === 'Aprovada'), anal = l.notas.filter(d => d.status === 'Em análise').length;
+  if (!aprov.length) return avisar('Esta semana ainda não tem despesas aprovadas.', 'Nada para exportar');
   // Soma por categoria das aprovadas (mesmo formato de somar())
   const v = Object.fromEntries(CAT.map(c => [c.chave, 0]));
   for (const d of aprov) { const k = chaveCat(d.categoria); v[k] = r2(v[k] + d.valor); }
   pdfFolhas(colab, [{
-    periodo: rotPeriodo(p), s: { v, total: somaAprov(notas) },
-    carimbo: p.status !== 'Pago' ? '' : antesDoSistema(p) ? 'PAGO ANTES DO SISTEMA' : `PAGO EM ${diaBR(p.pagoEm)}`,
-    nota: anal ? `Atenção: ${anal} despesa${anal > 1 ? 's' : ''} deste período ainda em análise não entr${anal > 1 ? 'aram' : 'ou'} nos valores.` : '',
-  }], `prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${p.dataInicial.slice(8)}-${p.dataInicial.slice(5, 7)}-a-${p.dataFinal.slice(8)}-${p.dataFinal.slice(5, 7)}-${p.dataFinal.slice(0, 4)}`);
-}
-// O Maurício fecha o período por um colaborador (ex.: ele esqueceu de enviar)
-function modalFecharPeriodo() {
-  const comPend = D.colaboradores.map(c => ({ c, l: naoEnviadas(c.id) })).filter(x => x.l.length);
-  if (!comPend.length) return avisar('Nenhum colaborador tem despesas ainda não enviadas.', 'Nada para fechar');
-  const m = abrirModal(`<h3>Fechar período por um colaborador</h3>
-    <span class="muted small">Junta as despesas que o colaborador ainda não enviou (em análise ou aprovadas) num período, igual ao botão "Fechar período e enviar" do app.</span>
-    <div class="field"><label>Colaborador</label><select class="input" id="m-colab">${comPend.map(({ c, l }) => { const ds = l.map(d => d.data).sort(); return opt(c.id, `${c.nome} · ${l.length} despesa${l.length === 1 ? '' : 's'} · ${brl(l.reduce((s, d) => s + d.valor, 0))} · ${dm(ds[0])} a ${dm(ds[ds.length - 1])}`, F.p.colab); }).join('')}</select></div>
-    <div id="m-erro" class="alert hidden"></div>
-    <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Fechar período</button></div>`);
-  m.querySelector('#m-cancel').onclick = fecharModal;
-  m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
-    try { await post('/api/admin/periodos/fechar', { colaboradorId: m.querySelector('#m-colab').value }); fecharModal(); await carregar(); telaPagamentos(); }
-    catch (err) { const el = m.querySelector('#m-erro'); el.textContent = err.message; el.classList.remove('hidden'); }
-  });
+    periodo: rotPeriodo(l), s: { v, total: somaAprov(l.notas) },
+    carimbo: l.tipo !== 'pago' ? '' : antesDoSistema(l) ? 'PAGO ANTES DO SISTEMA' : `PAGO EM ${diaBR(l.pagoEm)}`,
+    nota: anal ? `Atenção: ${anal} despesa${anal > 1 ? 's' : ''} desta semana ainda em análise não entr${anal > 1 ? 'aram' : 'ou'} nos valores.` : '',
+  }], `prestacao-de-contas-${semAcento(colab.nome).replace(/\W+/g, '-')}-${l.dataInicial.slice(8)}-${l.dataInicial.slice(5, 7)}-a-${l.dataFinal.slice(8)}-${l.dataFinal.slice(5, 7)}-${l.dataFinal.slice(0, 4)}`);
 }
 
 function telaColaboradores() {

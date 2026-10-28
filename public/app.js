@@ -165,7 +165,6 @@ async function telaInicio(recebidas) {
   $('i-mes').onchange = e => { mesSel = e.target.value; telaInicio(); };
   if ($('i-todas')) $('i-todas').onclick = () => { mesSel = 'todas'; telaInicio(); };
   $('i-fab').onclick = telaNova;
-  if ($('i-fechar')) $('i-fechar').onclick = fecharPeriodo;
   document.querySelectorAll('#i-lista .item').forEach(b => b.onclick = () => telaDetalhe(despesas.find(d => d.id === b.dataset.id)));
 }
 
@@ -249,41 +248,17 @@ function telaEnviada() {
 // ---------- C5 · Detalhe da despesa ----------
 // Card "não enviadas": despesas que ainda não estão em nenhum período (as recusadas não contam).
 // O colaborador fecha o período quando quiser (ex.: de 18 a 27) e as despesas vão juntas para pagamento.
-// Vale para todos os meses (não segue o seletor de mês), por isso o card diz "todos os meses".
+// Card "A receber": aprovadas ainda não pagas (de todos os meses). O sistema separa por semana sozinho e o
+// Maurício paga cada semana pelo painel; não há nada para o colaborador "fechar".
 function cardPeriodo() {
-  const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
-  const enviadas = despesas.filter(d => d.periodo && !['Pago', 'Anterior'].includes(d.periodo.status) && d.status !== 'Recusada');
-  if (!pend.length && !enviadas.length) return '';
-  const datas = pend.map(d => d.data).sort();
-  const aprovEnv = enviadas.filter(d => d.status === 'Aprovada'), analEnv = enviadas.length - aprovEnv.length;
+  const aberta = d => d.periodo && d.periodo.status === 'Aberta';
+  const aReceber = despesas.filter(d => d.status === 'Aprovada' && aberta(d));
+  const anal = despesas.filter(d => d.status === 'Em análise').length;
+  if (!aReceber.length && !anal) return '';
   return `<div class="card periodo-card">
-    ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento <span class="s">(todos os meses)</span></div>
-      <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${faixa(datas[0], datas[datas.length - 1])}</div>
-      <button class="btn block" id="i-fechar">Fechar período e enviar</button>` : ''}
-    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `<b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b> aprovado${aprovEnv.length === 1 ? '' : 's'}` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
+    <div class="t">A receber: ${brl(aReceber.reduce((s, d) => s + d.valor, 0))} <span class="s">(todos os meses)</span></div>
+    <div class="s">${aReceber.length} despesa${aReceber.length === 1 ? '' : 's'} aprovada${aReceber.length === 1 ? '' : 's'} aguardando pagamento${anal ? ` · ${anal} em análise pelo Maurício` : ''}. O pagamento é feito por semana.</div>
   </div>`;
-}
-let fechando = false; // trava contra toque duplo
-async function fecharPeriodo() {
-  if (fechando) return;
-  fechando = true;
-  try {
-    // Busca a lista atualizada antes de confirmar (o Maurício pode ter recusado alguma nota há pouco)
-    try { despesas = await api('/api/despesas'); } catch (e) { return avisar(e.message, 'Não foi possível enviar'); }
-    await telaInicio(despesas); // a tela já mostra o que mudou (ex.: nota recusada), mesmo se a pessoa cancelar
-    const pend = despesas.filter(d => !d.periodo && d.status !== 'Recusada');
-    if (!pend.length) { await telaInicio(despesas); return avisar('Não há despesas novas para enviar.', 'Nada para enviar'); }
-    const datas = pend.map(d => d.data).sort();
-    const ok = await confirmar(`${pend.length === 1 ? 'A despesa' : `As ${pend.length} despesas`} de ${faixa(datas[0], datas[datas.length - 1])} (${brl(pend.reduce((s, d) => s + d.valor, 0))}) ${pend.length === 1 ? 'vai' : 'vão'} para o Maurício como um período de pagamento.\n\nDepois disso ${pend.length === 1 ? 'ela não pode' : 'elas não podem'} mais ser excluídas nem ter a foto trocada. Despesas que você lançar depois entram no próximo período.`,
-      { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
-    if (!ok) return;
-    let r;
-    try { r = await api('/api/periodos/fechar', { method: 'POST', body: '{}' }); }
-    catch (err) { avisar(err.message, 'Não foi possível enviar'); return telaInicio().catch(() => {}); }
-    // Enviado: o aviso de sucesso aparece mesmo se a atualização da lista falhar logo depois
-    await telaInicio().catch(() => {});
-    avisar(`Período de ${faixa(r.periodo.dataInicial, r.periodo.dataFinal)} enviado com ${r.notas} despesa${r.notas === 1 ? '' : 's'}.`, 'Período enviado');
-  } finally { fechando = false; }
 }
 
 function telaDetalhe(d) {
@@ -293,11 +268,11 @@ function telaDetalhe(d) {
   const linha = d.status === 'Aprovada' ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
     : d.status === 'Recusada' ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
-  const linhaPer = !d.periodo ? (d.status !== 'Recusada' ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
+  const linhaPer = !d.periodo || d.status === 'Recusada' ? ''
     : d.periodo.status === 'Anterior' ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
-    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
-    : `<div class="okline gray">Enviada no período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}${d.status === 'Aprovada' ? ' · aguardando pagamento' : ''}</div>`;
-  const editavel = d.status === 'Em análise' && !d.periodo; // depois de enviada num período, fica travada
+    : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
+    : d.status === 'Aprovada' ? `<div class="okline gray">Aguardando pagamento · semana ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>` : '';
+  const editavel = d.status === 'Em análise'; // depois de avaliada pelo Maurício, não muda mais
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
