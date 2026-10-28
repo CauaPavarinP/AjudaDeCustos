@@ -26,6 +26,8 @@ const faixa = (a, b) => (a === b ? dm(a) : a.slice(0, 4) === b.slice(0, 4) ? `${
 let semConexaoNaTela = false; // aviso "sem conexão" visível: a atualização automática redesenha quando a rede voltar
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
+// Despesa que estava sendo enviada quando a sessão expirou: volta preenchida depois do login (mesmo usuário)
+let rascunho = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
 // d.fotoV vem do servidor e muda quando a foto é trocada (aqui ou em outro aparelho): vai no endereço da
 // imagem para o navegador não mostrar a foto antiga guardada em cache
@@ -36,8 +38,8 @@ const instalado = () => window.matchMedia('(display-mode: standalone)').matches 
 
 // ---------- foto da nota ----------
 // Botões "Tirar foto" (câmera) e "Galeria", com prévia, Trocar e Remover. Chama aoMudar(dataUrl | '').
-function seletorFoto(caixa, aoMudar, idErro) {
-  let atual = '';
+function seletorFoto(caixa, aoMudar, idErro, inicial = '') {
+  let atual = inicial;
   const desenha = () => {
     caixa.innerHTML = atual
       ? `<div class="foto-prev"><img src="${atual}" alt="Foto da nota"></div>
@@ -78,8 +80,10 @@ async function api(url, opts = {}) {
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
   if (r.status === 401 && !url.endsWith('/api/login')) {
+    const estavaLogado = !!me;
     telaLogin();
     if (corpo.erro && corpo.erro !== 'Faça login.') erro('l-erro', corpo.erro); // ex.: "Sua senha foi alterada"
+    else if (estavaLogado) erro('l-erro', 'Sua sessão expirou. Entre de novo.');
     throw Object.assign(new Error(corpo.erro || 'Faça login.'), { login: true });
   }
   if (!r.ok) throw new Error(corpo.erro || 'Erro de conexão. Tente novamente.');
@@ -94,7 +98,7 @@ function mostrar(html, aba) {
   document.querySelectorAll('#tabbar button').forEach(b => b.classList.toggle('on', b.dataset.tab === aba));
   window.scrollTo(0, 0);
 }
-function erro(id, msg) { const el = $(id); el.textContent = msg; el.classList.toggle('hidden', !msg); }
+function erro(id, msg) { const el = $(id); if (!el) return; el.textContent = msg; el.classList.toggle('hidden', !msg); }
 document.querySelectorAll('#tabbar button').forEach(b => b.addEventListener('click', () => ({ inicio: telaInicio, nova: telaNova, perfil: telaPerfil }[b.dataset.tab])()));
 
 // ---------- C1 · Login ----------
@@ -171,9 +175,9 @@ async function telaInicio(recebidas) {
 }
 
 // ---------- C3 · Nova despesa ----------
-function telaNova() {
+function telaNova(r = null) {
   telaAtual = 'nova';
-  let cat = '', centavos = 0, foto = '';
+  let cat = '', centavos = 0, foto = r ? r.foto : '';
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
     ${fotosLigadas ? '<div class="foto-box" id="n-foto"></div>' : '<div class="photo"><span style="font-size:28px">📷</span><span>Foto da nota</span><span class="pill">Indisponível no momento</span></div>'}
@@ -187,7 +191,7 @@ function telaNova() {
     <div id="n-erro" class="alert hidden"></div>
     <button class="btn lg block" id="n-enviar">Enviar despesa</button>`, 'nova');
   $('n-voltar').onclick = telaInicio;
-  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro');
+  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro', foto);
   document.querySelectorAll('#n-cats .chip').forEach(b => b.onclick = () => {
     cat = b.dataset.cat;
     document.querySelectorAll('#n-cats .chip').forEach(x => x.classList.toggle('on', x === b));
@@ -218,15 +222,26 @@ function telaNova() {
   campoValor.addEventListener('input', e => mudaValor(Number(e.target.value.replace(/\D/g, '').slice(-9) || 0)));
   campoValor.addEventListener('focus', fimValor);
   campoValor.addEventListener('click', fimValor);
+  if (r) { // voltou do login com a despesa que estava sendo enviada quando a sessão expirou
+    const chipCat = [...document.querySelectorAll('#n-cats .chip')].find(x => x.dataset.cat === r.categoria);
+    if (chipCat) chipCat.click();
+    mudaValor(r.centavos); $('n-data').value = r.data; $('n-obs').value = r.observacao;
+    erro('n-erro', 'Sua sessão tinha expirado. Confira os dados e toque em "Enviar despesa".');
+  }
   $('n-enviar').onclick = async () => {
     erro('n-erro', '');
     if (!cat) return erro('n-erro', 'Escolha a categoria.');
     if (!centavos) return erro('n-erro', 'Informe o valor da nota.');
     const b = $('n-enviar'); b.disabled = true; b.textContent = foto ? 'Enviando foto...' : 'Enviando...';
+    const dados = { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto };
+    const usuario = me.usuario;
     try {
-      ultima = await post('/api/despesas', { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto });
+      ultima = await post('/api/despesas', dados);
       telaEnviada();
-    } catch (err) { erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa'; }
+    } catch (err) {
+      if (err.login) { rascunho = { ...dados, centavos, usuario }; return; } // já está no login: guarda o que foi digitado
+      erro('n-erro', err.message); b.disabled = false; b.textContent = 'Enviar despesa';
+    }
   };
 }
 
@@ -305,18 +320,19 @@ function telaDetalhe(d) {
       const nova = await api('/api/despesas/' + encodeURIComponent(d.id) + '/foto', { method: 'PUT', body: JSON.stringify({ foto: f }) });
       despesas = despesas.map(x => (x.id === nova.id ? nova : x));
       telaDetalhe(nova);
-    } catch (err) { await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
+    } catch (err) { if (err.login) return; await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
   }, 'd-erro-foto');
   if ($('d-excluir')) $('d-excluir').onclick = async () => {
     if (!(await confirmar('Ela sai da sua lista e do painel do Maurício.', { titulo: 'Excluir esta despesa?', ok: 'Excluir', perigo: true }))) return;
     try { await api('/api/despesas/' + encodeURIComponent(d.id), { method: 'DELETE' }); telaInicio(); }
-    catch (err) { await redesenharDetalhe(d); if ($('d-erro-foto')) erro('d-erro-foto', err.message); }
+    catch (err) { if (err.login) return; await redesenharDetalhe(d); erro('d-erro-foto', err.message); }
   };
 }
 // Depois de um erro, busca a despesa de novo: se ela foi aprovada ou enviada num período em outro lugar,
 // a tela deixa de oferecer "Trocar foto" e "Excluir"
 async function redesenharDetalhe(d) {
   try { despesas = await api('/api/despesas'); } catch { /* sem conexão: usa a que já tem */ }
+  if (!me) return; // a sessão expirou e a tela já foi para o login
   const nova = despesas.find(x => x.id === d.id);
   if (nova) telaDetalhe(nova); else await telaInicio(despesas);
 }
@@ -350,7 +366,7 @@ function telaPerfil() {
       await post('/api/me/senha', { atual: $('p-atual').value, nova: $('p-nova').value });
       ['p-atual', 'p-nova', 'p-conf'].forEach(id => { $(id).value = ''; });
       $('p-ok').classList.remove('hidden');
-    } catch (err) { erro('p-erro', err.message); }
+    } catch (err) { if (err.login) return; erro('p-erro', err.message); }
     $('p-salvar').disabled = false;
   };
   $('p-sair').onclick = async () => { try { await fetch('/api/logout', { method: 'POST' }); } catch {} telaLogin(); };
@@ -388,7 +404,8 @@ async function iniciar() {
   me = await api('/api/me');
   if (!categorias.length) categorias = await api('/api/categorias');
   try { fotosLigadas = !!(await api('/api/config')).fotos; } catch { fotosLigadas = false; }
-  await telaInicio();
+  const r = rascunho; rascunho = null;
+  if (r && r.usuario === me.usuario) telaNova(r); else await telaInicio();
 }
 function comecar() {
   iniciar().catch(err => {

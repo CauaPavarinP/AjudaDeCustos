@@ -72,7 +72,7 @@ async function carregar() {
   $('nav-pend').textContent = pend;
   $('nav-pend').classList.toggle('hidden', !pend);
   D.periodos = D.periodos || [];
-  const aPagar = linhasPagamento().filter(l => l.tipo === 'aberta' && somaAprov(l.notas) > 0).length; // semanas com aprovadas a pagar
+  const aPagar = linhasPagamento().filter(prontaParaPagar).length;
   $('nav-pag').textContent = aPagar;
   $('nav-pag').classList.toggle('hidden', !aPagar);
 }
@@ -797,6 +797,9 @@ function pdfFolhas(colab, folhas, nomeArquivo) {
 // da nota). Cada linha "Aguardando pagamento" é uma semana com despesas ainda não pagas; ao pagar, o servidor
 // grava um registro de pagamento (D.periodos) e as despesas pagas ficam ligadas a ele (periodoId).
 const somaAprov = l => r2(l.filter(d => d.status === STATUS.aprovada).reduce((s, d) => s + d.valor, 0));
+// Semana em aberto com alguma despesa aprovada (a mesma conta no menu e no KPI). Semana só com notas em
+// análise também aparece na tabela, mas como "Aguardando análise".
+const prontaParaPagar = l => l.tipo === 'aberta' && somaAprov(l.notas) > 0;
 const rotPeriodo = p => `${p.dataInicial.slice(0, 4) === p.dataFinal.slice(0, 4) ? dm(p.dataInicial) : dmy(p.dataInicial)} a ${dmy(p.dataFinal)}`;
 const diaBR = iso => (iso ? new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '');
 // Despesa lançada antes do início do controle de pagamentos (pode já ter sido reembolsada fora do sistema)
@@ -829,7 +832,7 @@ function telaPagamentos() {
   const f = F.p;
   const todas = linhasPagamento().filter(l => !f.colab || l.colaboradorId === f.colab);
   const rows = todas.filter(l => !f.status || (f.status === PAGO ? l.tipo === 'pago' : l.tipo === 'aberta'));
-  const aguardando = todas.filter(l => l.tipo === 'aberta');
+  const aguardando = todas.filter(l => l.tipo === 'aberta'), prontas = aguardando.filter(prontaParaPagar);
   const mesAtual = hoje().slice(0, 7);
   const pagosMes = todas.filter(l => l.tipo === 'pago' && !antesDoSistema(l) && diaBR(l.pagoEm).split('/').reverse().join('-').startsWith(mesAtual));
   const anal = aguardando.reduce((s, l) => s + l.notas.filter(d => d.status === STATUS.analise).length, 0);
@@ -839,10 +842,10 @@ function telaPagamentos() {
     ${blocoAntigas()}
     <div class="card filters" style="grid-template-columns:1fr 2fr">
       <div class="field"><label>Colaborador</label><select class="input" id="p-colab">${opt('', 'Todos', f.colab)}${D.colaboradores.map(c => opt(c.id, c.nome, f.colab)).join('')}</select></div>
-      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', todas.length)}${chip('aguardando', 'Aguardando pagamento', aguardando.length)}${chip(PAGO, 'Pagos', todas.length - aguardando.length)}</div></div>
+      <div class="field"><label>Status</label><div class="chips">${chip('', 'Todos', todas.length)}${chip('aguardando', 'Em aberto', aguardando.length)}${chip(PAGO, 'Pagos', todas.length - aguardando.length)}</div></div>
     </div>
     <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
-      <div class="card kpi"><span class="l">Aguardando pagamento</span><span class="v">${brl(aguardando.reduce((s, l) => s + somaAprov(l.notas), 0))}</span><span class="muted small">${aguardando.length} semana${aguardando.length === 1 ? '' : 's'} (só as aprovadas)</span></div>
+      <div class="card kpi"><span class="l">Aguardando pagamento</span><span class="v">${brl(aguardando.reduce((s, l) => s + somaAprov(l.notas), 0))}</span><span class="muted small">${prontas.length} semana${prontas.length === 1 ? '' : 's'} com despesas aprovadas</span></div>
       <div class="card kpi"><span class="l">Pago em ${MESES[Number(mesAtual.slice(5)) - 1].toLowerCase()}</span><span class="v">${brl(pagosMes.reduce((s, l) => s + l.valorPago, 0))}</span><span class="muted small">${pagosMes.length} pagamento${pagosMes.length === 1 ? '' : 's'}</span></div>
       <div class="card kpi"><span class="l">Em análise nas semanas a pagar</span><span class="v">${anal}</span><span class="muted small">despesa${anal === 1 ? '' : 's'} para aprovar ou recusar antes de pagar</span></div>
     </div>
@@ -856,7 +859,7 @@ function telaPagamentos() {
         <td>${rotPeriodo(l)}${pago && !antesDoSistema(l) && (D.periodos || []).some(o => o.id !== l.id && o.colaboradorId === l.colaboradorId && o.dataInicial === l.dataInicial) ? '<br><span class="muted small">pagamento separado (nota lançada depois)</span>' : ''}</td>
         <td style="white-space:nowrap">${l.notas.length}${na ? ` <span class="badge b-amber">${na} em análise</span>` : ''}</td>
         <td class="num b">${fmt(pago ? l.valorPago : somaAprov(l.notas))}</td>
-        <td>${pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}` : '<span class="badge b-amber">Aguardando pagamento</span>'}</td>
+        <td>${pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}` : prontaParaPagar(l) ? '<span class="badge b-amber">Aguardando pagamento</span>' : '<span class="badge b-gray">Aguardando análise</span>'}</td>
         <td><span class="chips">
           <button class="btn xs" data-ver="${esc(l.id)}">Ver notas</button>
           <button class="btn xs" data-pdf="${esc(l.id)}">PDF</button>
