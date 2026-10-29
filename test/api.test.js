@@ -141,6 +141,20 @@ test('colaborador: dados bancários (opcionais) vão para o painel, não para o 
   assert.equal((await a.post('/api/admin/colaboradores', { nome: 'CPF Errado', usuario: usuario + 'x', funcao: 'Vendedor', cpf: '123.456.789-00' })).status, 400);
 });
 
+test('colaborador: editar sem mandar os dados bancários não apaga os que já existem', async () => {
+  const a = await adminLogado();
+  const usuario = 'mantem' + Date.now().toString(36);
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Mantém Banco', usuario, funcao: 'Vendedor', banco: 'Banco Teste', pix: 'chave-teste', cidade: 'Lins' });
+  assert.equal(r.status, 201, JSON.stringify(r.dados));
+  const e = await a.put('/api/admin/colaboradores/' + r.dados.id, { nome: 'Mantém Banco 2', usuario, funcao: 'Vendedor' });
+  assert.equal(e.status, 200, JSON.stringify(e.dados));
+  const col = (await a.get('/api/admin/dados')).dados.colaboradores.find(c => c.id === r.dados.id);
+  assert.deepEqual([col.nome, col.banco, col.pix, col.cidade], ['Mantém Banco 2', 'Banco Teste', 'chave-teste', 'Lins']);
+  // mandando o campo vazio, apaga (é assim que o painel limpa um campo)
+  await a.put('/api/admin/colaboradores/' + r.dados.id, { nome: 'Mantém Banco 2', usuario, funcao: 'Vendedor', pix: '' });
+  assert.equal((await a.get('/api/admin/dados')).dados.colaboradores.find(c => c.id === r.dados.id).pix, '');
+});
+
 test('período: o colaborador fecha, a despesa enviada trava, só paga depois de analisar, reabrir e desfazer', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);
@@ -248,6 +262,8 @@ test('despesa: validações', async () => {
   assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Outros', valor: 10 })).status, 400);
   assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 0 })).status, 400);
   assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 99999 })).status, 400);
+  // data com texto sobrando depois não é cortada e aceita
+  assert.equal((await c.post('/api/despesas', { data: ontem() + 'xyz', categoria: 'Hotel', valor: 10 })).status, 400);
 });
 
 test('fluxo completo: envia com foto, aprova, desfaz, exclui', async () => {

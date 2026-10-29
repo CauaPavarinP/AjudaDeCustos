@@ -22,13 +22,17 @@ const statusVisto = d => (paga(d) ? PAGA : d.status);
 const diaPago = d => new Date(d.periodo.pagoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 // "18/10 a 27/10" (com o ano nas duas pontas quando o intervalo vira o ano: "28/12/2026 a 05/01/2027")
 // Um dia só: "11/10" (em vez de "11/10 a 11/10")
-const faixa = (a, b) => (a === b ? dm(a) : a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dm(b)}` : `${dmy(a)} a ${dmy(b)}`);
+// Data curta: "30/12" no ano atual; "30/12/2025" em outro ano (para não confundir)
+const dataCurta = s => (s.slice(0, 4) === hoje().slice(0, 4) ? dm(s) : dmy(s));
+const faixa = (a, b) => (a === b ? dataCurta(a) : a.slice(0, 4) === b.slice(0, 4) ? `${dm(a)} a ${dataCurta(b)}` : `${dmy(a)} a ${dmy(b)}`);
 let semConexaoNaTela = false; // aviso "sem conexão" visível: a atualização automática redesenha quando a rede voltar
 
 let me = null, despesas = [], categorias = [], mesSel = hoje().slice(0, 7), ultima = null;
 // Despesa que estava sendo enviada quando a sessão expirou: volta preenchida depois do login (mesmo usuário)
 let rascunho = null;
 let telaAtual = '', detalheId = '', fotosLigadas = false;
+// Muda a cada tela desenhada: uma resposta que chega atrasada não troca a tela que a pessoa abriu depois
+let nav = 0;
 // d.fotoV vem do servidor e muda quando a foto é trocada (aqui ou em outro aparelho): vai no endereço da
 // imagem para o navegador não mostrar a foto antiga guardada em cache
 const urlFoto = d => `/api/despesas/${encodeURIComponent(d.id)}/foto${d.fotoV ? '?v=' + d.fotoV : ''}`;
@@ -92,6 +96,7 @@ async function api(url, opts = {}) {
 const post = (url, body) => api(url, { method: 'POST', body: JSON.stringify(body || {}) });
 
 function mostrar(html, aba) {
+  nav++;
   tela().innerHTML = html;
   tela().classList.toggle('no-nav', !aba);
   $('tabbar').classList.toggle('hidden', !aba);
@@ -105,6 +110,7 @@ document.querySelectorAll('#tabbar button').forEach(b => b.addEventListener('cli
 function telaLogin() {
   telaAtual = 'login';
   me = null;
+  despesas = []; ultima = null; detalheId = ''; // nada da pessoa anterior fica para a próxima (o rascunho é conferido pelo usuário)
   mesSel = hoje().slice(0, 7); // o próximo usuário começa no mês atual
   mostrar(`
     <div class="login-brand"><div class="logo-rs">R$</div><h1>Ajuda de Custo</h1><span class="muted small">101 do Brasil · área do colaborador</span></div>
@@ -135,8 +141,10 @@ async function telaInicio(recebidas) {
   let semConexao = false;
   if (Array.isArray(recebidas)) despesas = recebidas;
   else {
+    const vez = nav;
     try { despesas = await api('/api/despesas'); }
     catch (e) { if (!e.rede) throw e; semConexao = true; } // sem internet: mostra a última lista carregada
+    if (nav !== vez) return; // a pessoa já foi para outra tela enquanto a lista carregava
   }
   semConexaoNaTela = semConexao;
   if (!me) return; // saiu (botão Sair) enquanto a lista carregava
@@ -163,8 +171,8 @@ async function telaInicio(recebidas) {
     <div class="sec-title"><span>Minhas despesas</span>${mesSel !== 'todas' ? '<button class="link" id="i-todas">Ver todas</button>' : ''}</div>
     <div class="list" id="i-lista">
       ${lista.map(d => `<button class="item" data-id="${esc(d.id)}">${icone(d.categoria)}
-        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${dm(d.data)}${d.observacao ? ' · ' + esc(d.observacao) : ''}</div></div>
-        <div class="r"><b>${brl(d.valor)}</b>${badge(statusVisto(d))}</div></button>`).join('') || '<div class="empty">Nenhuma despesa neste mês.<br>Toque no + para lançar.</div>'}
+        <div class="grow"><div class="t">${esc(d.categoria)}</div><div class="s">${dataCurta(d.data)}${d.observacao ? ' · ' + esc(d.observacao) : ''}</div></div>
+        <div class="r"><b>${brl(d.valor)}</b>${badge(statusVisto(d))}</div></button>`).join('') || `<div class="empty">${mesSel === 'todas' ? 'Nenhuma despesa ainda.' : 'Nenhuma despesa neste mês.'}<br>Toque no + para lançar.</div>`}
     </div>
     <div class="fab-espaco"></div>
     <button class="fab" id="i-fab" aria-label="Nova despesa">+</button>`, 'inicio');
@@ -288,7 +296,11 @@ async function fecharPeriodo() {
   fechando = true;
   try {
     // Busca a lista atualizada antes de confirmar (o Maurício pode ter recusado alguma nota há pouco)
-    try { despesas = await api('/api/despesas'); } catch (e) { if (!e.login) avisar(e.message, 'Não foi possível enviar'); return; }
+    const botao = texto => { const b = $('i-fechar'); if (b) { b.disabled = true; b.textContent = texto; } };
+    botao('Atualizando...');
+    const vez = nav;
+    try { despesas = await api('/api/despesas'); } catch (e) { if (!e.login && nav === vez) { avisar(e.message, 'Não foi possível enviar'); telaInicio(despesas); } return; }
+    if (nav !== vez) return; // foi para outra tela enquanto carregava: não puxa de volta
     await telaInicio(despesas); // a tela já mostra o que mudou (ex.: nota recusada), mesmo se a pessoa cancelar
     const pend = despesas.filter(naoEnviada);
     if (!pend.length) return avisar('Não há despesas novas para enviar.', 'Nada para enviar');
@@ -297,10 +309,12 @@ async function fecharPeriodo() {
       { titulo: 'Fechar período e enviar?', ok: 'Fechar e enviar' });
     if (!ok) return;
     let r;
+    botao('Enviando...');
+    const antes = nav;
     try { r = await post('/api/periodos/fechar'); }
-    catch (err) { if (err.login) return; avisar(err.message, 'Não foi possível enviar'); return telaInicio().catch(() => {}); }
+    catch (err) { if (err.login) return; avisar(err.message, 'Não foi possível enviar'); return nav === antes ? telaInicio().catch(() => {}) : undefined; }
     // Enviado: o aviso de sucesso aparece mesmo se a atualização da lista falhar logo depois
-    await telaInicio().catch(() => {});
+    if (nav === antes) await telaInicio().catch(() => {});
     avisar(`Período de ${faixa(r.periodo.dataInicial, r.periodo.dataFinal)} enviado com ${r.notas} despesa${r.notas === 1 ? '' : 's'}.`, 'Período enviado');
   } finally { fechando = false; }
 }
@@ -323,6 +337,7 @@ function telaDetalhe(d) {
     ${d.foto
     ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
        <span class="tip center">Toque na foto para ampliar.</span>`
+    : editavel && fotosLigadas ? '' // a área para enviar a foto já aparece logo abaixo
     : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
     ${editavel && fotosLigadas
     ? (d.foto ? '<button class="btn block secondary" id="d-trocar">📷 Trocar foto</button><div class="foto-box hidden" id="d-foto"></div>' : '<div class="foto-box" id="d-foto"></div>')
@@ -359,7 +374,9 @@ function telaDetalhe(d) {
 // Depois de um erro, busca a despesa de novo: se ela foi aprovada ou enviada num período em outro lugar,
 // a tela deixa de oferecer "Trocar foto" e "Excluir"
 async function redesenharDetalhe(d) {
+  const vez = nav;
   try { despesas = await api('/api/despesas'); } catch { /* sem conexão: usa a que já tem */ }
+  if (nav !== vez) return; // já está em outra tela
   if (!me) return; // a sessão expirou e a tela já foi para o login
   const nova = despesas.find(x => x.id === d.id);
   if (nova) telaDetalhe(nova); else await telaInicio(despesas);

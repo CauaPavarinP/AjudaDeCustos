@@ -185,7 +185,7 @@ function telaLancamentos() {
       <tbody>
         ${rows.map(r => `<tr class="click" data-row="${esc(r.id)}">
           <td class="b">${esc(r.colaborador)}${r.origem === 'app' ? '<span class="tag-app">APP</span>' : ''}${r.fotos ? `<span class="tag-foto" title="${r.fotos} comprovante(s)">📎${r.fotos}</span>` : ''}</td><td>${esc(r.funcao)}</td>
-          <td class="num" style="text-align:left">${dm(r.dataInicial)} a ${dmy(r.dataFinal)}</td><td>${r.mesRef.slice(5)}</td>
+          <td class="num" style="text-align:left">${rotPeriodo(r)}</td><td>${r.mesRef.slice(5)}</td>
           ${CAT.map(c => `<td class="num${r.valores[c.chave] ? '' : ' dim'}">${cel(r.valores[c.chave])}</td>`).join('')}
           <td class="obs${r.observacao ? '' : ' dim'}" title="${esc(r.observacao)}">${esc(r.observacao) || '—'}</td>
           <td class="num b">${fmt(r.total)}</td></tr>`).join('')}
@@ -286,7 +286,7 @@ function modalNota(d, voltar, voltaDepois = false) {
           <div><span>Data da nota</span><span>${dmy(d.data)}</span></div>
           <div><span>Observação</span><span>${esc(d.observacao) || '—'}</span></div>
           <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
-          <div><span>Status</span><span>${esc(d.status)}${d.avaliadoEm ? ` · ${quando(d.avaliadoEm)}` : ''}</span></div>
+          <div><span>Status</span><span>${esc(statusVisto(d))}${d.avaliadoEm ? ` · ${quando(d.avaliadoEm)}` : ''}</span></div>
         </div>
         ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
@@ -358,12 +358,14 @@ const confirmarDesfazer = d => confirmar(
 
 // ======================= DESPESAS DO CELULAR =======================
 // Todas as despesas enviadas pelo app, com filtro por status (inclui as recusadas, que não aparecem nos Lançamentos)
-const STATUS_COR = { [STATUS.analise]: 'b-amber', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red' };
+const STATUS_COR = { [STATUS.analise]: 'b-amber', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red', [PAGA]: 'b-blue' };
+// Quando foi paga: a data do pagamento, ou "antes do sistema" (marcada em "Já foram pagas", não foi paga naquele dia)
+const quandoPaga = p => (antesDoSistema(p) ? 'antes do sistema' : 'em ' + diaBR(p.pagoEm));
 const periodoDaDespesa = d => d.periodoId && (D.periodos || []).find(p => p.id === d.periodoId);
 const periodoTravado = d => (periodoDaDespesa(d) || {}).status === PAGO; // despesa de período pago: não muda mais
 // Status como aparece nas telas e no Excel: "Paga" quando o período foi pago
 // Selo "Paga em dd/mm" ao lado da despesa (listas de despesas do app)
-const seloPaga = d => { const p = periodoDaDespesa(d); return p && p.status === PAGO && d.status === STATUS.aprovada ? ` <span class="badge b-blue">Paga em ${diaBR(p.pagoEm).slice(0, 5)}</span>` : ''; };
+const seloPaga = d => { const p = periodoDaDespesa(d); return p && p.status === PAGO && d.status === STATUS.aprovada ? ` <span class="badge b-blue">Paga ${antesDoSistema(p) ? 'antes do sistema' : 'em ' + diaBR(p.pagoEm).slice(0, 5)}</span>` : ''; };
 const statusVisto = d => (d.status === STATUS.aprovada && (periodoDaDespesa(d) || {}).status === PAGO ? PAGA : d.status);
 function telaDespesas() {
   const f = F.d;
@@ -405,7 +407,7 @@ function telaDespesas() {
         <td>${esc(d.categoria)}</td><td class="num b">${fmt(d.valor)}</td>
         <td class="muted obs-col"><div class="obs-txt" title="${esc(d.observacao)}">${esc(d.observacao) || '—'}</div></td>
         <td>${(() => { const per = d.periodoId && D.periodos.find(p => p.id === d.periodoId); return per && per.status === PAGO && d.status === STATUS.aprovada
-          ? `<span class="badge b-blue">Paga</span><br><span class="muted small">em ${diaBR(per.pagoEm)}</span>`
+          ? `<span class="badge b-blue">Paga</span><br><span class="muted small">${quandoPaga(per)}</span>`
           : `<span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(d.status)}</span>${d.avaliadoEm ? `<br><span class="muted small">${quando(d.avaliadoEm)}</span>` : ''}`; })()}</td>
         <td>${d.foto ? '📷' : '<span class="muted small">—</span>'}</td>
         <td><span class="chips">${d.status === STATUS.analise
@@ -437,7 +439,8 @@ function telaDespesas() {
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
     [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
     [...rows.map(d => { const p = periodoDaDespesa(d); return [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, statusVisto(d), quando(d.avaliadoEm),
-      p ? `${rotPeriodo(p)} · ${p.status === PAGO ? 'pago em ' + diaBR(p.pagoEm) : 'enviado, aguardando pagamento'}` : antiga(d) ? 'antes do controle de pagamentos' : d.status !== STATUS.recusada ? 'não enviada' : '', d.foto ? 'Sim' : 'Não']; }),
+      p ? `${rotPeriodo(p)} · ${d.status === STATUS.recusada ? 'enviada, recusada (não entra no pagamento)' : p.status === PAGO ? 'paga ' + quandoPaga(p)
+        : d.status === STATUS.analise ? 'enviada, aguardando análise' : 'enviada, aguardando pagamento'}` : antiga(d) ? 'antes do controle de pagamentos' : d.status !== STATUS.recusada ? 'não enviada' : '', d.foto ? 'Sim' : 'Não']; }),
       ['Total', '', '', '', soma(rows), '', '', '', '', '']]));
 }
 
@@ -849,7 +852,7 @@ function telaPagamentos() {
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Colaborador</th><th>Período</th><th>Notas</th><th class="num">Valor aprovado</th><th>Status</th><th>Ações</th></tr></thead>
       <tbody>${rows.map(l => {
-        const na = l.notas.filter(d => d.status === STATUS.analise).length, colab = D.colaboradores.find(c => c.id === l.colaboradorId);
+        const na = l.notas.filter(d => d.status === STATUS.analise).length;
         const pago = l.tipo === 'pago';
         const status = pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
           : na ? '<span class="badge b-gray">Aguardando análise</span>'
@@ -863,11 +866,10 @@ function telaPagamentos() {
         <td><span class="chips">
           <button class="btn xs" data-ver="${esc(l.id)}">Ver notas</button>
           <button class="btn xs" data-pdf="${esc(l.id)}">PDF</button>
-          ${colab && colab.pix ? `<button class="btn xs" data-pix="${esc(colab.pix)}" title="Copiar a chave PIX de ${esc(colab.nome)}">📋 PIX</button>` : ''}
           ${pago ? `<button class="btn xs" data-despagar="${esc(l.id)}">Desfazer pagamento</button>`
             : `<button class="btn xs ok" data-pagar="${esc(l.id)}">✔ Pagar</button><button class="btn xs" data-reabrir="${esc(l.id)}">Reabrir</button>`}
         </span></td></tr>`;
-      }).join('') || '<tr class="empty-row"><td colspan="6">Nenhum período enviado ainda.</td></tr>'}</tbody>
+      }).join('') || `<tr class="empty-row"><td colspan="6">${!todas.length ? 'Nenhum período enviado ainda.' : f.status === PAGO ? 'Nenhum período pago.' : f.status ? 'Nenhum período aguardando pagamento.' : 'Nenhum período.'}</td></tr>`}</tbody>
     </table></div></div>
     <p class="muted small">Só dá para pagar depois de aprovar ou recusar todas as notas do período. "Reabrir" devolve as despesas ao colaborador como não enviadas (ex.: para ele juntar com outras e enviar de novo).</p>`;
 
@@ -889,10 +891,6 @@ function telaPagamentos() {
   });
   document.querySelectorAll('[data-ver]').forEach(b => b.onclick = () => modalPeriodo(b.dataset.ver));
   document.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => pdfPeriodo(acha(b.dataset.pdf)));
-  document.querySelectorAll('[data-pix]').forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.pix); b.textContent = '✔ Copiado'; setTimeout(() => { b.textContent = '📋 PIX'; }, 1500); }
-    catch { avisar('Chave PIX: ' + b.dataset.pix, 'Copie a chave'); }
-  });
   document.querySelectorAll('[data-pagar]').forEach(b => b.onclick = async () => {
     const l = acha(b.dataset.pagar), na = l.notas.filter(d => d.status === STATUS.analise).length;
     if (na) return avisar(`Ainda há ${na} despesa${na > 1 ? 's' : ''} em análise neste período. Clique em "Ver notas" para aprovar ou recusar antes de pagar.`, 'Falta analisar');
@@ -920,7 +918,7 @@ function modalPeriodo(id) {
   const pago = l.tipo === 'pago';
   const m = abrirModal(`<h3>${esc(l.colaborador)} · ${rotPeriodo(l)}</h3>
     <span class="muted small">${l.notas.length} nota${l.notas.length === 1 ? '' : 's'} · ${pago ? `pago ${brl(l.valorPago)} em ${diaBR(l.pagoEm)}` : `aprovado ${brl(somaAprov(l.notas))}`}</span>
-    <div class="rows card">${l.notas.map(d => `<div data-nota="${esc(d.id)}" style="cursor:pointer"><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}<br><span class="badge ${STATUS_COR[d.status] || 'b-gray'}">${esc(statusVisto(d))}</span></span><span class="valor">${brl(d.valor)}</span></div>`).join('') || '<div><span class="muted">Nenhuma nota.</span></div>'}</div>
+    <div class="rows card">${l.notas.map(d => `<div data-nota="${esc(d.id)}" style="cursor:pointer"><span class="desc">${dmy(d.data)} · ${esc(d.categoria)}${d.observacao ? ' · ' + esc(d.observacao) : ''}<br><span class="badge ${STATUS_COR[statusVisto(d)] || 'b-gray'}">${esc(statusVisto(d))}</span></span><span class="valor">${brl(d.valor)}</span></div>`).join('') || '<div><span class="muted">Nenhuma nota.</span></div>'}</div>
     <span class="muted small">${pago ? 'Pago: clique numa nota para ver a foto.' : 'Clique numa nota para ver a foto e aprovar ou recusar.'}</span>
     <div class="acts"><button class="btn" id="m-fechar">Fechar</button></div>`);
   m.querySelector('#m-fechar').onclick = () => { fecharModal(); telaPagamentos(); };
@@ -938,7 +936,9 @@ function modalFecharPeriodo() {
   m.querySelector('#m-cancel').onclick = fecharModal;
   m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
     try { await post('/api/admin/periodos/fechar', { colaboradorId: m.querySelector('#m-colab').value }); fecharModal(); await carregar(); telaPagamentos(); }
-    catch (err) { const el = m.querySelector('#m-erro'); el.textContent = err.message; el.classList.remove('hidden'); }
+    catch (err) { // mudou em outra aba (ex.: já fechado): atualiza a tela e mostra o motivo
+      fecharModal(); await carregar().catch(() => {}); telaPagamentos(); avisar(err.message, 'Não foi possível fechar');
+    }
   });
 }
 function pdfPeriodo(l) {

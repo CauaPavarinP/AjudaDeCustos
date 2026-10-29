@@ -24,7 +24,6 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
   - **No painel, aba Pagamentos:** lista os períodos enviados, com:
     - "Ver notas", para aprovar ou recusar;
     - "PDF", a folha do período, com o carimbo "PAGO EM" quando pago;
-    - "📋 PIX";
     - "✔ Pagar", só depois de analisar todas as notas; grava o valor pago, que é a soma das aprovadas;
     - "Reabrir", que desfaz o envio e devolve as despesas ao colaborador como não enviadas;
     - "Desfazer pagamento", que volta o período para "Aguardando pagamento".
@@ -43,10 +42,12 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 
 Crie uma planilha nova e compartilhe com o e-mail da Service Account como **Editor**. Pode ser a mesma Service Account da Fila de Atendimento. Ao iniciar, o sistema cria sozinho as abas:
 
-- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm
+- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm, Telefone, Cidade, UF, Banco, Agencia, Conta, CPF, PIX (as colunas a partir de Telefone são opcionais e criadas sozinhas)
 - `Funcoes`: ID, Nome, CriadoEm
 - `Prestacoes`: ID, ColaboradorID, Colaborador, Funcao, DataInicial, DataFinal, MesReferencia, Combustivel, Alimentacao, Degustacao, Hotel, Transporte, Outros, Total, Observacao, CriadoEm, Fotos (referências das fotos separadas por `|`; criada sozinha)
-- `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor, Foto (a coluna Foto é criada sozinha em planilhas que já existem)
+- `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor, Foto, PeriodoID (as colunas Foto e PeriodoID são criadas sozinhas em planilhas que já existem). PeriodoID fica vazio enquanto a despesa não foi enviada; depois guarda o ID do período (ou `liberada`, para uma despesa antiga que voltou a poder entrar num período)
+- `Periodos`: ID, ColaboradorID, Colaborador, DataInicial, DataFinal, Status (`Enviado` ou `Pago`), FechadoEm, FechadoPor, PagoEm, PagoPor, ValorPago
+- `Config`: ID, Valor. Guarda `inicioPeriodos`, a data em que o controle de pagamentos começou (não altere)
 
 > Não renomeie as abas nem as colunas, e não edite os IDs nem a coluna SenhaHash à mão.
 

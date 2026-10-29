@@ -314,7 +314,7 @@ app.post('/api/periodos/fechar', exigeColab, wrap(async (req, res) => {
 }));
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
-  const data = texto(req.body.data, 10);
+  const data = texto(req.body.data, 20); // não corta: "2026-10-20xyz" tem que ser recusada, não virar 2026-10-20
   const categoria = texto(req.body.categoria, 30);
   const v = valor(req.body.valor);
   const observacao = texto(req.body.observacao, 200);
@@ -335,8 +335,13 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
     if (f.erro) return erro(res, f.erro);
     d.foto = f.ref;
   }
-  try { await store.add('Despesas', d); }
-  catch (e) { apagarFoto(d.foto); throw e; }
+  // Mesma trava da exclusão do colaborador: não sobra despesa de quem acabou de ser excluído
+  const gravou = await comTrava(chaveFechar(req.colab.id), async () => {
+    if (!(await store.list('Colaboradores', { fresco: true })).some(c => c.id === req.colab.id && c.ativo)) return false;
+    await store.add('Despesas', d);
+    return true;
+  }).catch(e => { apagarFoto(d.foto); throw e; });
+  if (!gravou) { apagarFoto(d.foto); return erro(res, 'Acesso desativado.', 401); }
   res.status(201).json(publicoDesp(d));
 }));
 
@@ -477,7 +482,8 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
     if ('nome' in req.body) {
       const v = await validarColab(req.body, id);
       if (v.erro) return v;
-      Object.assign(campos, v);
+      // nome, usuário e função sempre; os opcionais (telefone, cidade, banco, CPF...) só se vieram no pedido
+      for (const [k, val] of Object.entries(v)) if (['nome', 'usuario', 'funcao'].includes(k) || k in req.body) campos[k] = val;
     }
     return store.update('Colaboradores', id, campos);
   });
@@ -490,11 +496,14 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
 // para os resumos continuarem certos.
 app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
-  const [prest, desp] = await Promise.all([store.list('Prestacoes'), store.list('Despesas')]);
-  const n = prest.filter(p => p.colaboradorId === id).length + desp.filter(d => d.colaboradorId === id).length;
-  if (n) return erro(res, `Este colaborador tem ${n} lançamento${n === 1 ? '' : 's'} (prestações ou despesas do app). Para manter o histórico, use Desativar.`);
-  const ok = await store.remove('Colaboradores', id);
-  if (!ok) return erro(res, 'Colaborador não encontrado.', 404);
+  // Conta os lançamentos e exclui sem ninguém lançar no meio (mesma trava do lançamento de despesa)
+  const r = await comTrava(chaveFechar(id), async () => {
+    const [prest, desp] = await Promise.all([store.list('Prestacoes', { fresco: true }), store.list('Despesas', { fresco: true })]);
+    const n = prest.filter(p => p.colaboradorId === id).length + desp.filter(d => d.colaboradorId === id).length;
+    if (n) return { erro: `Este colaborador tem ${n} lançamento${n === 1 ? '' : 's'} (prestações ou despesas do app). Para manter o histórico, use Desativar.` };
+    return (await store.remove('Colaboradores', id)) ? {} : { erro: 'Colaborador não encontrado.', status: 404 };
+  });
+  if (r.erro) return erro(res, r.erro, r.status || 400);
   res.json({ ok: true });
 }));
 
@@ -504,7 +513,7 @@ async function validarPrestacao(body, atual) {
   if (!colab) return { erro: 'Escolha o colaborador.' };
   const mesmoColab = atual && atual.colaboradorId === colab.id;
   if (!colab.ativo && !mesmoColab) return { erro: `${colab.nome} está desativado. Reative o colaborador para lançar uma prestação nova.` };
-  const dataInicial = texto(body.dataInicial, 10), dataFinal = texto(body.dataFinal, 10), mesRef = texto(body.mesRef, 7);
+  const dataInicial = texto(body.dataInicial, 20), dataFinal = texto(body.dataFinal, 20), mesRef = texto(body.mesRef, 20); // não corta antes de validar
   const problema = problemaData(dataInicial, 'A data inicial') || problemaData(dataFinal, 'A data final');
   if (problema) return { erro: problema };
   if (dataFinal < dataInicial) return { erro: 'A data final não pode ser antes da inicial.' };
@@ -690,8 +699,14 @@ app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (r
       const volta = await store.update('Periodos', id, { status: ENVIADO, pagoEm: '', pagoPor: '', valorPago: 0 }, a => a.status === PAGO);
       return volta ? { periodo: volta } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
     }
-    for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === id)) {
-      await store.update('Despesas', d.id, { periodoId: '' }, a => a.periodoId === id);
+    try {
+      for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === id)) {
+        await store.update('Despesas', d.id, { periodoId: '' }, a => a.periodoId === id);
+      }
+    } catch (e) { // falha no meio: o pagamento fica só com as que sobraram, com o valor certo (repetir termina)
+      const restam = (await store.list('Despesas', { fresco: true }).catch(() => [])).filter(x => x.periodoId === id && x.status === STATUS.aprovada);
+      await store.update('Periodos', id, { valorPago: r2(restam.reduce((t, d) => t + d.valor, 0)) }).catch(() => {});
+      throw e;
     }
     await store.remove('Periodos', id);
     return { ok: true };
@@ -718,7 +733,14 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
       fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: `${ADMIN_NOME} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
     await store.add('Periodos', pg);
     let soma = 0, n = 0;
-    for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, livre); if (ok) { soma += ok.valor; n++; } }
+    const entraram = [];
+    try {
+      for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, livre); if (ok) { soma += ok.valor; n++; entraram.push(d); } }
+    } catch (e) { // falha no meio (ex.: cota do Google): desfaz o que entrou, para não sobrar pagamento pela metade
+      for (const d of entraram) await store.update('Despesas', d.id, { periodoId: '' }, a => a.periodoId === pg.id).catch(() => {});
+      await store.remove('Periodos', pg.id).catch(() => {});
+      throw e;
+    }
     if (!n) { // todas mudaram no meio do caminho: não deixa um pagamento vazio
       await store.remove('Periodos', pg.id);
       return { erro: 'As despesas antigas mudaram enquanto você decidia. Confira a tela de novo.', status: 409 };
@@ -737,7 +759,7 @@ app.get('/admin', (req, res) => { semCache(res); res.sendFile(path.join(__dirnam
 app.use('/api', (req, res) => erro(res, 'Rota não encontrada.', 404));
 
 app.use((err, req, res, next) => {
-  if (err.type === 'entity.too.large') return erro(res, 'Foto muito grande. Tente outra foto.', 413);
+  if (err.type === 'entity.too.large') return erro(res, rotaComFoto(req) ? 'Foto muito grande. Tente outra foto.' : 'Dados grandes demais. Confira o que foi digitado.', 413);
   if (err.status >= 400 && err.status < 500) return erro(res, 'Requisição inválida.', err.status);
   // Só o resumo: o objeto inteiro de um erro do Google traz o token de acesso nos cabeçalhos
   console.error(`[erro] ${req.method} ${req.originalUrl.split('?')[0]} — ${resumoErro(err)}`);
