@@ -56,7 +56,13 @@ Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, po
 - As tabelas ficam no schema `ajuda`, que não é publicado pela API do Supabase.
 - As tabelas têm o RLS (proteção por linha) ligado sem nenhuma regra, então ninguém lê pela internet. Só o servidor acessa, pela conexão direta.
 - **Nunca** crie regras (policies) nem mova as tabelas para o schema `public`: há CPF e dados bancários.
-- Para criptografar e conferir a conexão, baixe o certificado em **Database Settings → SSL Configuration** e aponte `DATABASE_SSL_CA` para o arquivo.
+- **Certificado (`DATABASE_SSL_CA`)**: baixe em **Database Settings → SSL Configuration** e aponte `DATABASE_SSL_CA` para o arquivo, ou cole o texto do certificado direto na variável (no Render, as quebras de linha podem virar espaços, que o sistema arruma sozinho).
+  - Com o certificado, a conexão é criptografada **e conferida**, e um `sslmode` no endereço é ignorado.
+  - **Em produção (`NODE_ENV=production`) ele é obrigatório**: sem ele, o sistema não sobe, porque CPF e dados bancários passariam sem criptografia.
+  - No teste local ele é opcional, e o terminal avisa que a conexão está sem criptografia.
+- **Se o banco cair ou travar:** cada ação espera no máximo 10 s para conectar e 30 s por consulta, e depois mostra erro. O servidor continua no ar e reconecta sozinho.
+- **Pagar, "Já foram pagas", "Incluir para pagar" e "Desfazer pagamento"** são gravados numa transação só: se algo falhar no meio, nada fica gravado. Na planilha, o sistema desfaz o que já tinha gravado.
+- **Primeira vez:** o sistema grava em `Config` a data de início do controle de pagamentos e cria as funções iniciais (Vendedor e Promotora). Se depois todas as funções forem excluídas, elas **não** voltam sozinhas.
 
 **Manter o banco gratuito ativo:** o Supabase pausa projetos gratuitos depois de 7 dias sem uso. A rotina `.github/workflows/manter-banco-ativo.yml` chama `https://ajudadecustos.onrender.com/health?banco=1` a cada 2 dias, e esse endereço faz uma leitura leve no banco.
 - Se o Render estiver dormindo, a chamada o acorda.
@@ -71,6 +77,8 @@ Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, po
 node scripts/migrar-planilha-para-banco.js                 # só copia se o banco estiver vazio
 node scripts/migrar-planilha-para-banco.js --apagar-antes  # apaga o que estiver no banco e copia de novo
 ```
+
+A cópia é feita numa transação só: se qualquer linha der erro, como um ID repetido na planilha, **nada é gravado** no banco, e a mensagem diz a aba e o ID. Se o sistema já estiver rodando com esse banco, **reinicie-o depois da migração** para ele ler os dados copiados.
 
 A planilha só é **lida**: nada nela é criado, alterado ou apagado. No fim, o script confere se a quantidade de linhas de cada tabela bateu.
 

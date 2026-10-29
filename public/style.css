@@ -280,3 +280,6 @@ td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: 
 .thumb .x:hover { background: var(--red); }
 .thumb-nova { position: absolute; left: 4px; bottom: 4px; background: var(--amber-soft); color: var(--amber); font-size: 10px; font-weight: 600; border-radius: 4px; padding: 1px 5px; }
 @media (max-width: 760px) { .nota-grid { grid-template-columns: 1fr; } .nota-img { height: 50vh; } }
+
+/* comprovante que não existe mais (no lugar da miniatura quebrada) */
+.thumb-sem { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: 11px; color: #cbd5e1; text-align: center; padding: 4px; }

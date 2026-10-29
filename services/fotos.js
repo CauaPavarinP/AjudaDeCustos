@@ -76,7 +76,7 @@ function criarCloudinary(cfg) {
       // Link de download privado (assinado), válido por poucos minutos, usado só pelo servidor
       const params = assinados({ public_id: ref, format: 'jpg', type: 'authenticated', expires_at: Math.floor(Date.now() / 1000) + 300 });
       const r = await fetch(api('download') + '?' + new URLSearchParams(params));
-      if (!r.ok) throw new Error('Cloudinary download: ' + r.status);
+      if (!r.ok) throw Object.assign(new Error('Cloudinary download: ' + r.status), { naoExiste: r.status === 404 });
       return Buffer.from(await r.arrayBuffer());
     },
     async apagar(ref) {
@@ -92,7 +92,7 @@ function criarMemoria() {
   return {
     modo: 'memoria',
     async salvar(id, buf) { const ref = `${PASTA}/${id}-${crypto.randomBytes(6).toString('hex')}`; fotos.set(ref, buf); return ref; },
-    async ler(ref) { if (!fotos.has(ref)) throw new Error('Foto não encontrada.'); return fotos.get(ref); },
+    async ler(ref) { if (!fotos.has(ref)) throw Object.assign(new Error('Foto não encontrada.'), { naoExiste: true }); return fotos.get(ref); },
     async apagar(ref) { fotos.delete(ref); },
   };
 }

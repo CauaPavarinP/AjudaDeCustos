@@ -90,7 +90,7 @@ function paraLinha(tabela, obj) {
 function criarStoreMemoria() {
   const dados = Object.fromEntries(Object.keys(TABELAS).map(t => [t, []]));
   const copia = o => JSON.parse(JSON.stringify(o));
-  return {
+  const loja = {
     modo: 'memoria',
     async init() {},
     async list(t) { return copia(dados[t]); },
@@ -111,6 +111,8 @@ function criarStoreMemoria() {
       return copia(dados[t].splice(i, 1)[0]); // devolve a linha apagada (como estava na hora)
     },
   };
+  loja.transacao = comDesfazer(loja);
+  return loja;
 }
 
 // ---------------- Google Sheets ----------------
@@ -162,7 +164,7 @@ function criarStoreSheets({ spreadsheetId, email, privateKey, somenteLeitura = f
     return vez;
   };
 
-  return {
+  const loja = {
     modo: 'sheets',
     async init() {
       await doc.loadInfo();
@@ -201,6 +203,35 @@ function criarStoreSheets({ spreadsheetId, email, privateKey, somenteLeitura = f
       return apagada; // devolve a linha apagada (como estava na hora)
     }),
   };
+  loja.transacao = comDesfazer(loja);
+  return loja;
+}
+
+// ---------------- várias gravações como uma só (planilha e memória) ----------------
+// Banco de verdade tem transação (tudo ou nada). Para a planilha e a memória, guarda como desfazer cada
+// gravação e, se der erro no meio, desfaz na ordem inversa (melhor esforço), para não sobrar meio pagamento.
+function comDesfazer(base) {
+  return async fn => {
+    const desfazer = [];
+    const tx = {
+      list: (t, o) => base.list(t, { ...o, fresco: true }),
+      async add(t, obj) { const r = await base.add(t, obj); desfazer.push(() => base.remove(t, obj.id)); return r; },
+      async update(t, id, campos, se) {
+        let antes = null;
+        const r = await base.update(t, id, campos, a => { antes = a; return !se || se(a); });
+        if (r && antes) {
+          const volta = Object.fromEntries(Object.keys(campos).filter(k => k in antes).map(k => [k, antes[k]]));
+          desfazer.push(() => base.update(t, id, volta));
+        }
+        return r;
+      },
+      async remove(t, id, se) { const r = await base.remove(t, id, se); if (r && typeof r === 'object') desfazer.push(() => base.add(t, r)); return r; },
+    };
+    try { return await fn(tx); } catch (e) {
+      for (const d of desfazer.reverse()) await Promise.resolve().then(d).catch(err => console.error('[store] não foi possível desfazer uma gravação:', err.message));
+      throw e;
+    }
+  };
 }
 
 // ---------------- PostgreSQL (ex.: Supabase) ----------------
@@ -209,14 +240,49 @@ function criarStoreSheets({ spreadsheetId, email, privateKey, somenteLeitura = f
 // "public"): só o servidor, conectado como dono do banco, lê e grava (há CPF e dados bancários).
 // As colunas têm o mesmo nome usado no código (ex.: "colaboradorId"); "_ordem" guarda a ordem de inclusão,
 // como as linhas da planilha.
-function criarStoreBanco({ url, schema = 'ajuda', ca = '' }) {
+const SCHEMAS_PROIBIDOS = /^(public|information_schema|pg_.*)$/;
+// Confere a configuração e monta as opções de conexão. Os erros citam a variável e nunca mostram a senha.
+function configBanco({ url, schema, ca, producao }) {
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(schema) || SCHEMAS_PROIBIDOS.test(schema)) {
+    throw new Error('DATABASE_SCHEMA inválido: use letras minúsculas, números e _ (e não "public" nem nomes do sistema, como "pg_...").');
+  }
+  let endereco;
+  try { endereco = new URL(String(url).trim()); } catch { endereco = null; }
+  if (!endereco || !/^postgres(ql)?:$/.test(endereco.protocol) || !endereco.hostname) {
+    throw new Error('DATABASE_URL inválida: deve começar com postgresql://. Se a senha tiver @ # / : % ? ou espaço, troque por uma só com letras e números.');
+  }
+  let ssl;
+  if (ca) {
+    let pem = ca;
+    if (!ca.includes('BEGIN CERTIFICATE')) {
+      try { pem = require('fs').readFileSync(ca, 'utf8'); } catch { throw new Error('DATABASE_SSL_CA: arquivo do certificado não encontrado. Confira o caminho.'); }
+    }
+    // Arruma o texto colado no Render: "\n" escrito, ou quebras de linha que viraram espaços
+    pem = pem.replace(/\\n/g, '\n').replace(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g,
+      (_, corpo) => `-----BEGIN CERTIFICATE-----\n${corpo.replace(/\s+/g, '').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`);
+    ssl = { ca: pem }; // criptografada E conferida (nunca aceita certificado errado)
+    // sslmode/sslrootcert no endereço passariam por cima do certificado: quem manda é o DATABASE_SSL_CA
+    for (const k of [...endereco.searchParams.keys()]) if (/^ssl/i.test(k)) endereco.searchParams.delete(k);
+  } else if (producao) {
+    throw new Error('DATABASE_SSL_CA é obrigatório em produção: sem ele a conexão com o banco não é criptografada (há CPF e dados bancários).');
+  } else {
+    console.warn('[banco] DATABASE_SSL_CA não definido: conexão SEM criptografia (aceito só fora de produção).');
+  }
+  return {
+    connectionString: endereco.toString(), ssl,
+    max: 4, // o pooler gratuito aceita poucas conexões
+    connectionTimeoutMillis: 10000, // banco fora do ar: erro em 10 s, em vez de a tela ficar carregando para sempre
+    query_timeout: 30000, statement_timeout: 30000, idleTimeoutMillis: 30000, keepAlive: true,
+  };
+}
+
+function criarStoreBanco({ url, schema = 'ajuda', ca = '', producao = false }) {
   const { Pool } = require('pg');
-  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(schema)) throw new Error('DATABASE_SCHEMA inválido: use letras minúsculas, números e _.');
-  // Certificado do banco (Supabase: Database Settings > SSL Configuration): conexão criptografada E conferida.
-  // Pode ser o caminho do arquivo .crt ou o próprio texto do certificado.
-  const ssl = ca ? { ca: ca.includes('BEGIN CERTIFICATE') ? ca.replace(/\\n/g, '\n') : require('fs').readFileSync(ca, 'utf8') } : undefined;
-  const pool = new Pool({ connectionString: url, ssl, max: 4 }); // o pooler gratuito aceita poucas conexões
+  const pool = new Pool(configBanco({ url, schema, ca, producao }));
   pool.on('error', err => console.error('[banco] conexão perdida:', err.message)); // o pool reconecta sozinho
+  // Toda conexão ganha um tratador de erro para a vida inteira: sem ele, uma conexão que cai no meio de uma
+  // transação (ou logo depois de devolvida) derrubaria o servidor inteiro ("Unhandled 'error' event")
+  pool.on('connect', cliente => cliente.on('error', err => console.error('[banco] conexão caiu:', err.message)));
 
   const nome = t => `"${schema}"."${t}"`;
   const col = c => `"${c}"`;
@@ -231,76 +297,94 @@ function criarStoreBanco({ url, schema = 'ajuda', ca = '' }) {
     }
     return r;
   }
-  // Só as colunas conhecidas, no tipo certo
+  // Só as colunas conhecidas, no tipo certo (o PostgreSQL não aceita o caractere NUL em texto)
   function paraBanco(t, obj) {
     const r = {};
     for (const k of chaves(t)) {
       if (!(k in obj)) continue;
       const ti = tipo(t, k);
-      r[k] = ti === 'boolean' ? !!obj[k] : ti === 'text' ? String(obj[k] ?? '') : Number(obj[k]) || 0;
+      r[k] = ti === 'boolean' ? !!obj[k] : ti === 'text' ? String(obj[k] ?? '').split('\u0000').join('') : Math.round((paraNumero(obj[k]) || 0) * 100) / 100;
     }
     return r;
   }
-  // Roda fn(cliente) numa transação; a linha lida com FOR UPDATE fica travada até o fim
-  async function transacao(fn) {
+  // Leituras e gravações sobre uma conexão (q = pool.query ou a de uma transação)
+  function operacoes(q) {
+    const lerTravada = async (t, id) => (await q(`SELECT * FROM ${nome(t)} WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+    return {
+      sql: q, // comando direto (só para criar tabelas e para a migração)
+      async list(t) { return (await q(`SELECT * FROM ${nome(t)} ORDER BY "_ordem"`)).rows.map(l => deBanco(t, l)); },
+      async add(t, obj) {
+        const v = paraBanco(t, obj), ks = Object.keys(v);
+        await q(`INSERT INTO ${nome(t)} (${ks.map(col).join(', ')}) VALUES (${ks.map((_, i) => '$' + (i + 1)).join(', ')})`, ks.map(k => v[k]));
+        return obj;
+      },
+      async update(t, id, campos, se) {
+        const linha = await lerTravada(t, id);
+        if (!linha) return null;
+        if (se && !se(deBanco(t, linha))) return false;
+        const v = paraBanco(t, campos); delete v.id;
+        const ks = Object.keys(v);
+        if (ks.length) await q(`UPDATE ${nome(t)} SET ${ks.map((k, i) => `${col(k)} = $${i + 2}`).join(', ')} WHERE id = $1`, [id, ...ks.map(k => v[k])]);
+        return deBanco(t, { ...linha, ...v }); // exatamente o que ficou gravado
+      },
+      async remove(t, id, se) {
+        const linha = await lerTravada(t, id);
+        if (!linha) return false;
+        const apagada = deBanco(t, linha);
+        if (se && !se(apagada)) return 'conflito';
+        await q(`DELETE FROM ${nome(t)} WHERE id = $1`, [id]);
+        return apagada; // devolve a linha apagada (como estava na hora)
+      },
+    };
+  }
+  // Roda fn(tx) numa transação: tudo é gravado junto ou nada é gravado. trava (opcional): só uma transação
+  // com esse nome por vez em todo o banco (ex.: dois servidores subindo juntos).
+  async function transacao(fn, { trava } = {}) {
     const c = await pool.connect();
+    let quebrou = false;
     try {
       await c.query('BEGIN');
-      const r = await fn(c);
+      if (trava) await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${schema}:${trava}`]);
+      const r = await fn(operacoes((sql, p) => c.query(sql, p)));
       await c.query('COMMIT');
       return r;
     } catch (e) {
+      quebrou = true;
       await c.query('ROLLBACK').catch(() => {});
       throw e;
-    } finally { c.release(); }
+    } finally {
+      c.release(quebrou); // conexão com problema é descartada; o pool abre outra
+    }
   }
-  const lerTravada = async (c, t, id) => (await c.query(`SELECT * FROM ${nome(t)} WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+  const direto = operacoes((sql, p) => pool.query(sql, p));
 
   return {
     modo: 'banco',
     pool, // usado pelo script de migração
-    async init() {
-      await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+    transacao,
+    // Cria o que faltar; com trava, para dois servidores subindo juntos não criarem a mesma tabela ao mesmo tempo
+    init: () => transacao(async tx => {
+      await tx.sql(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
       for (const t of Object.keys(TABELAS)) {
-        await pool.query(`CREATE TABLE IF NOT EXISTS ${nome(t)} (id text PRIMARY KEY, "_ordem" bigserial)`);
+        await tx.sql(`CREATE TABLE IF NOT EXISTS ${nome(t)} (id text PRIMARY KEY, "_ordem" bigserial)`);
         // Coluna nova (versão nova do sistema) entra sozinha, como na planilha
-        for (const k of chaves(t)) if (k !== 'id') await pool.query(`ALTER TABLE ${nome(t)} ADD COLUMN IF NOT EXISTS ${col(k)} ${tipo(t, k)}`);
-        await pool.query(`ALTER TABLE ${nome(t)} ENABLE ROW LEVEL SECURITY`);
+        for (const k of chaves(t)) if (k !== 'id') await tx.sql(`ALTER TABLE ${nome(t)} ADD COLUMN IF NOT EXISTS ${col(k)} ${tipo(t, k)}`);
+        await tx.sql(`ALTER TABLE ${nome(t)} ENABLE ROW LEVEL SECURITY`);
       }
-    },
-    async list(t) {
-      return (await pool.query(`SELECT * FROM ${nome(t)} ORDER BY "_ordem"`)).rows.map(l => deBanco(t, l));
-    },
-    async add(t, obj) {
-      const v = paraBanco(t, obj), ks = Object.keys(v);
-      await pool.query(`INSERT INTO ${nome(t)} (${ks.map(col).join(', ')}) VALUES (${ks.map((_, i) => '$' + (i + 1)).join(', ')})`, ks.map(k => v[k]));
-      return obj;
-    },
+    }, { trava: 'init' }),
+    list: t => direto.list(t),
+    add: (t, obj) => direto.add(t, obj),
     // se(atual) opcional: só grava se a condição for verdadeira; senão devolve false (conflito)
-    update: (t, id, campos, se) => transacao(async c => {
-      const linha = await lerTravada(c, t, id);
-      if (!linha) return null;
-      const antes = deBanco(t, linha);
-      if (se && !se(antes)) return false;
-      const v = paraBanco(t, campos); delete v.id;
-      const ks = Object.keys(v);
-      if (ks.length) await c.query(`UPDATE ${nome(t)} SET ${ks.map((k, i) => `${col(k)} = $${i + 2}`).join(', ')} WHERE id = $1`, [id, ...ks.map(k => v[k])]);
-      return { ...antes, ...campos };
-    }),
+    update: (t, id, campos, se) => transacao(tx => tx.update(t, id, campos, se)),
     // se(atual) opcional: só apaga se a condição for verdadeira (senão devolve 'conflito')
-    remove: (t, id, se) => transacao(async c => {
-      const linha = await lerTravada(c, t, id);
-      if (!linha) return false;
-      const apagada = deBanco(t, linha);
-      if (se && !se(apagada)) return 'conflito';
-      await c.query(`DELETE FROM ${nome(t)} WHERE id = $1`, [id]);
-      return apagada; // devolve a linha apagada (como estava na hora)
-    }),
+    remove: (t, id, se) => transacao(tx => tx.remove(t, id, se)),
   };
 }
 
 function criarStore(env) {
-  if (env.DATABASE_URL) return criarStoreBanco({ url: env.DATABASE_URL, schema: env.DATABASE_SCHEMA || undefined, ca: env.DATABASE_SSL_CA || '' });
+  if (env.DATABASE_URL) {
+    return criarStoreBanco({ url: env.DATABASE_URL, schema: env.DATABASE_SCHEMA || undefined, ca: env.DATABASE_SSL_CA || '', producao: env.NODE_ENV === 'production' });
+  }
   const spreadsheetId = env.SPREADSHEET_ID;
   const email = env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const privateKey = (env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
@@ -312,4 +396,4 @@ function criarStore(env) {
   return criarStoreMemoria();
 }
 
-module.exports = { criarStore, criarStoreSheets, criarStoreBanco, novoId, paraNumero, TABELAS };
+module.exports = { criarStore, criarStoreSheets, criarStoreBanco, configBanco, novoId, paraNumero, TABELAS };

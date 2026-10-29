@@ -53,7 +53,9 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
   }
 }
 
-const store = criarStore(process.env);
+let store;
+try { store = criarStore(process.env); }
+catch (err) { console.error('Configuração inválida:', err.message); process.exit(1); }
 const fotos = criarFotos(process.env); // null quando o envio de fotos está desligado
 const app = express();
 app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
@@ -130,7 +132,9 @@ function problemaData(s, nome) {
 }
 const valorMaximoTxt = () => VALOR_MAXIMO.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
-const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+// eslint-disable-next-line no-control-regex
+const CONTROLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g; // invisíveis (o PostgreSQL recusa o NUL)
+const texto = (v, max) => String(v ?? '').replace(CONTROLE, '').replace(/\s+/g, ' ').trim().slice(0, max);
 const r2 = n => Math.round(n * 100) / 100;
 const valor = v => r2(paraNumero(v));
 const iguais = (a, b) => {
@@ -266,7 +270,10 @@ async function enviarFotoRef(res, ref) {
   try {
     const buf = await fotos.ler(ref);
     res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600' }).send(buf);
-  } catch (e) { console.error('[fotos] ler', e.message); erro(res, 'Não foi possível carregar a foto.', 502); }
+  } catch (e) {
+    if (e.naoExiste) return erro(res, 'A foto não está mais disponível.', 404);
+    console.error('[fotos] ler', e.message); erro(res, 'Não foi possível carregar a foto.', 502);
+  }
 }
 
 // ================= COLABORADOR (celular) =================
@@ -331,8 +338,13 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
     if (f.erro) return erro(res, f.erro);
     d.foto = f.ref;
   }
-  try { await store.add('Despesas', d); }
-  catch (e) { apagarFoto(d.foto); throw e; }
+  // mesma trava da exclusão do colaborador: não sobra despesa de colaborador que acabou de ser excluído
+  const gravou = await comTrava(`colab:${req.colab.id}`, async () => {
+    if (!(await store.list('Colaboradores', { fresco: true })).some(c => c.id === req.colab.id && c.ativo)) return false;
+    await store.add('Despesas', d);
+    return true;
+  }).catch(e => { apagarFoto(d.foto); throw e; });
+  if (!gravou) { apagarFoto(d.foto); return erro(res, 'Acesso desativado.', 401); }
   res.status(201).json(publicoDesp(d));
 }));
 
@@ -553,11 +565,14 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
 // para os resumos continuarem certos.
 app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
-  const [prest, desp] = await Promise.all([store.list('Prestacoes'), store.list('Despesas')]);
-  const n = prest.filter(p => p.colaboradorId === id).length + desp.filter(d => d.colaboradorId === id).length;
-  if (n) return erro(res, `Este colaborador tem ${n} lançamento${n === 1 ? '' : 's'} (prestações ou despesas do app). Para manter o histórico, use Desativar.`);
-  const ok = await store.remove('Colaboradores', id);
-  if (!ok) return erro(res, 'Colaborador não encontrado.', 404);
+  // Conta os lançamentos e exclui sem ninguém lançar no meio (mesma trava do lançamento de despesa)
+  const r = await comTrava(`colab:${id}`, async () => {
+    const [prest, desp] = await Promise.all([store.list('Prestacoes', { fresco: true }), store.list('Despesas', { fresco: true })]);
+    const n = prest.filter(p => p.colaboradorId === id).length + desp.filter(d => d.colaboradorId === id).length;
+    if (n) return { erro: `Este colaborador tem ${n} lançamento${n === 1 ? '' : 's'} (prestações ou despesas do app). Para manter o histórico, use Desativar.` };
+    return (await store.remove('Colaboradores', id)) ? {} : { erro: 'Colaborador não encontrado.', status: 404 };
+  });
+  if (r.erro) return erro(res, r.erro, r.status || 400);
   res.json({ ok: true });
 }));
 
@@ -594,7 +609,7 @@ app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
   const p = await validarPrestacao(req.body);
   if (p.erro) return erro(res, p.erro);
   const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
-  await store.add('Prestacoes', nova);
+  await comTrava(`colab:${nova.colaboradorId}`, () => store.add('Prestacoes', nova));
   res.status(201).json(publicoPrest(nova));
 }));
 app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
@@ -689,6 +704,20 @@ const acharPeriodo = async id => (await store.list('Periodos', { fresco: true })
 const acharColab = async id => (await store.list('Colaboradores')).find(x => x.id === String(id || ''));
 // Pagar a semana de um colaborador: só depois de todas as notas não pagas dessa semana serem aprovadas ou
 // recusadas. Cria o registro do pagamento e marca cada despesa aprovada com o ID dele.
+// Grava o pagamento e liga as notas a ele numa transação só: se algo falhar no meio, nada fica gravado
+// (nunca sobra um "Pago" com valor errado ou com só parte das notas). livre(a): a nota ainda pode entrar.
+function pagarJuntas(pg, notas, livre, msgMudou) {
+  return store.transacao(async tx => {
+    let soma = 0, n = 0;
+    await tx.add('Periodos', pg);
+    for (const d of notas) {
+      const ok = await tx.update('Despesas', d.id, { periodoId: pg.id }, livre);
+      if (ok) { soma += ok.valor; n++; }
+    }
+    if (!n) { await tx.remove('Periodos', pg.id); return { erro: msgMudou, status: 409 }; } // não deixa pagamento vazio
+    return { pagamento: await tx.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+  });
+}
 app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
   const c = await acharColab(req.body.colaboradorId);
   if (!c) return erro(res, 'Escolha o colaborador.');
@@ -703,14 +732,7 @@ app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
     const agora = new Date().toISOString();
     const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: semana, dataFinal: fimSemana(semana), status: PAGO,
       fechadoEm: agora, fechadoPor: req.admin.nome, pagoEm: agora, pagoPor: req.admin.nome, valorPago: 0 };
-    await store.add('Periodos', pg);
-    let soma = 0, n = 0;
-    for (const d of notas) {
-      const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, a => a.status === STATUS.aprovada && naoPaga(a));
-      if (ok) { soma += ok.valor; n++; }
-    }
-    if (!n) { await store.remove('Periodos', pg.id); return { erro: 'Essas despesas acabaram de mudar em outra tela. A lista foi atualizada.', status: 409 }; }
-    return { pagamento: await store.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+    return pagarJuntas(pg, notas, a => a.status === STATUS.aprovada && naoPaga(a), 'Essas despesas acabaram de mudar em outra tela. A lista foi atualizada.');
   });
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.status(201).json(r);
@@ -727,21 +749,16 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
     const lista = (await store.list('Despesas', { fresco: true })).filter(d => d.colaboradorId === c.id && antiga(d));
     if (!lista.length) return { erro: 'Esse colaborador não tem despesas antigas pendentes.' };
     if (req.body.jaPagas !== true) {
-      let n = 0;
-      for (const d of lista) if (await store.update('Despesas', d.id, { periodoId: LIBERADA }, livre)) n++;
-      return { notas: n };
+      return store.transacao(async tx => { // todas ou nenhuma
+        let n = 0;
+        for (const d of lista) if (await tx.update('Despesas', d.id, { periodoId: LIBERADA }, livre)) n++;
+        return { notas: n };
+      });
     }
     const datas = lista.map(d => d.data).sort(), agora = new Date().toISOString();
     const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: datas[0], dataFinal: datas[datas.length - 1], status: PAGO,
       fechadoEm: agora, fechadoPor: req.admin.nome, pagoEm: agora, pagoPor: `${req.admin.nome} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
-    await store.add('Periodos', pg);
-    let soma = 0, n = 0;
-    for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, livre); if (ok) { soma += ok.valor; n++; } }
-    if (!n) { // todas mudaram no meio do caminho: não deixa um pagamento vazio
-      await store.remove('Periodos', pg.id);
-      return { erro: 'As despesas antigas mudaram enquanto você decidia. Confira a tela de novo.', status: 409 };
-    }
-    return { pagamento: await store.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+    return pagarJuntas(pg, lista, livre, 'As despesas antigas mudaram enquanto você decidia. Confira a tela de novo.');
   });
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.status(201).json(r);
@@ -752,12 +769,12 @@ app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (r
   const pg = await acharPeriodo(req.params.id);
   if (!pg) return erro(res, 'Pagamento não encontrado.', 404);
   const antesDoSistema = Regras.antesDoSistema(pg);
-  await comTrava(`semana:${pg.colaboradorId}:${pg.dataInicial}`, async () => {
-    for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === pg.id)) {
-      await store.update('Despesas', d.id, { periodoId: !antesDoSistema && d.criadoEm < INICIO_PERIODOS ? LIBERADA : '' });
+  await comTrava(`semana:${pg.colaboradorId}:${pg.dataInicial}`, () => store.transacao(async tx => { // tudo ou nada
+    for (const d of (await tx.list('Despesas')).filter(x => x.periodoId === pg.id)) {
+      await tx.update('Despesas', d.id, { periodoId: !antesDoSistema && d.criadoEm < INICIO_PERIODOS ? LIBERADA : '' });
     }
-    await store.remove('Periodos', pg.id);
-  });
+    await tx.remove('Periodos', pg.id);
+  }));
   res.json({ ok: true });
 }));
 
@@ -780,17 +797,29 @@ app.use((err, req, res, next) => {
 
 async function iniciar() {
   await store.init();
-  // Início do controle de pagamentos: gravado uma vez só (INICIO_PERIODOS no ambiente serve para os testes)
-  const cfg = (await store.list('Config')).find(c => c.id === 'inicioPeriodos');
-  INICIO_PERIODOS = process.env.INICIO_PERIODOS || (cfg && cfg.valor) || '';
-  if (!cfg) {
-    INICIO_PERIODOS = INICIO_PERIODOS || new Date().toISOString();
-    await store.add('Config', { id: 'inicioPeriodos', valor: INICIO_PERIODOS });
-  }
-  // Cria as funções iniciais na primeira vez
-  if (!(await store.list('Funcoes')).length) {
-    for (const nome of FUNCOES_INICIAIS) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
-  }
+  // Primeira vez (com trava: dois servidores subindo juntos não gravam duas vezes)
+  const gravado = await store.transacao(async tx => {
+    const cfg = await tx.list('Config');
+    const valor = id => (cfg.find(c => c.id === id) || {}).valor;
+    // Início do controle de pagamentos: sempre a data real da primeira vez. INICIO_PERIODOS no ambiente (testes)
+    // vale só enquanto estiver definido e nunca é gravado.
+    if (!valor('inicioPeriodos')) await tx.add('Config', { id: 'inicioPeriodos', valor: new Date().toISOString() });
+    // Funções iniciais: só na primeira vez (se depois todas forem excluídas, não voltam sozinhas)
+    if (!valor('funcoesIniciais')) {
+      if (!(await tx.list('Funcoes')).length) {
+        for (const nome of FUNCOES_INICIAIS) await tx.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });
+      }
+      await tx.add('Config', { id: 'funcoesIniciais', valor: 'criadas' });
+    }
+    return (await tx.list('Config')).find(c => c.id === 'inicioPeriodos').valor;
+  }, { trava: 'inicio' });
+  INICIO_PERIODOS = process.env.INICIO_PERIODOS || gravado;
   app.listen(PORT, () => console.log(`Ajuda de Custo rodando na porta ${PORT} (armazenamento: ${store.modo}, fotos: ${fotos ? fotos.modo : "desligadas"})`));
 }
-iniciar().catch(err => { console.error('Falha ao iniciar:', resumoErro(err)); process.exit(1); });
+// Dica em português para os erros de conexão com o banco mais comuns na hora de subir
+const dicaBanco = msg => (store.modo !== 'banco' ? ''
+  : /certificate|self.signed/i.test(msg) ? ' → o DATABASE_SSL_CA não confere com o certificado do banco (baixe de novo no Supabase).'
+  : /password authentication/i.test(msg) ? ' → senha do banco errada no DATABASE_URL.'
+  : /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout/i.test(msg) ? ' → o banco não respondeu: confira o DATABASE_URL e se o projeto do Supabase está ativo (não pausado).'
+  : '');
+iniciar().catch(err => { const r = resumoErro(err); console.error('Falha ao iniciar:', r + dicaBanco(r)); process.exit(1); });

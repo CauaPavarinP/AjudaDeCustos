@@ -294,8 +294,8 @@ function telaDetalhe(d) {
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
-    ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
-       <span class="tip center">Toque na foto para ampliar.</span>`
+    ? `<a class="foto-prev" id="d-foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota"></a>
+       <span class="tip center" id="d-foto-dica">Toque na foto para ampliar.</span>`
     : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
     ${editavel && fotosLigadas
     ? (d.foto ? '<button class="btn block secondary" id="d-trocar">📷 Trocar foto</button><div class="foto-box hidden" id="d-foto"></div>' : '<div class="foto-box" id="d-foto"></div>')
@@ -313,6 +313,14 @@ function telaDetalhe(d) {
     ${linhaPer}
     ${editavel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
+  // Foto que não abriu: diz se ela não existe mais ou se foi falha passageira (sem link nem "toque para ampliar")
+  const imgFoto = $('d-foto-prev') && $('d-foto-prev').querySelector('img');
+  if (imgFoto) imgFoto.onerror = async () => {
+    let msg = 'Não foi possível carregar a foto. Tente de novo em instantes.';
+    try { if ((await fetch(imgFoto.src, { credentials: 'same-origin' })).status === 404) msg = 'A foto não está mais disponível.'; } catch { /* sem internet */ }
+    if ($('d-foto-prev')) $('d-foto-prev').replaceWith(Object.assign(document.createElement('div'), { className: 'photo light', textContent: msg }));
+    if ($('d-foto-dica')) $('d-foto-dica').remove();
+  };
   if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
   if ($('d-foto')) seletorFoto($('d-foto'), async f => {
     if (!f) return;

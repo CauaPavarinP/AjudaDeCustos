@@ -129,6 +129,11 @@ const mesTxt = ym => ym.slice(5) + '/' + ym.slice(0, 4);
 function exportar(nome, aba, colunas, linhas) { baixarXlsx(nome, [{ nome: aba, colunas, linhas, totalNoFim: true }]); }
 
 // ---------- modal ----------
+// Foto que não abriu: pergunta ao servidor o motivo (foto que não existe mais × falha passageira)
+async function motivoFoto(url) {
+  try { return (await fetch(url, { credentials: 'same-origin' })).status === 404 ? 'A foto não está mais disponível.' : 'Não foi possível carregar a foto. Tente de novo em instantes.'; }
+  catch { return 'Não foi possível carregar a foto. Confira a internet e tente de novo.'; }
+}
 function abrirModal(html, classe = '') { $('modal').innerHTML = `<div class="card modal ${classe}">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
 function fecharModal() { $('modal').classList.add('hidden'); $('modal').innerHTML = ''; }
 $('modal').addEventListener('click', e => { if (e.target === $('modal')) fecharModal(); });
@@ -291,7 +296,7 @@ function modalNota(d, voltar, voltaDepois = false) {
           <div><span>Enviada em</span><span>${quando(d.criadoEm)}</span></div>
           <div><span>Status</span><span>${esc(d.status)}${d.avaliadoEm ? ` · ${quando(d.avaliadoEm)}` : ''}</span></div>
         </div>
-        ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
+        ${d.foto ? `<a class="link small" id="m-abrir" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
         ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
           : perPago ? '<span class="muted small">Período já pago: para mudar esta despesa, desfaça o pagamento em Pagamentos.</span>'
@@ -302,7 +307,12 @@ function modalNota(d, voltar, voltaDepois = false) {
   const img = m.querySelector('#m-img img');
   if (img) {
     img.onclick = () => m.querySelector('#m-img').classList.toggle('zoom');
-    img.onerror = () => { m.querySelector('#m-img').innerHTML = '<span class="sem">Não foi possível carregar a foto. Tente de novo em instantes.</span>'; };
+    img.onerror = async () => {
+      const msg = await motivoFoto(img.src);
+      const caixa = m.querySelector('#m-img'), abrir = m.querySelector('#m-abrir');
+      if (caixa) caixa.innerHTML = `<span class="sem">${esc(msg)}</span>`;
+      if (abrir) abrir.remove(); // o link abriria só uma mensagem de erro
+    };
   }
   m.querySelector('#m-fechar').onclick = () => (voltar ? voltar() : fecharModal());
   // Confere na hora se a despesa ainda existe (o colaborador pode tê-la excluído depois da última atualização)
@@ -339,10 +349,10 @@ function verFotos(lista, inicio = 0) {
     caixa.classList.remove('zoom');
     caixa.innerHTML = `<img src="${lista[i]}" alt="Comprovante ${i + 1}" title="Clique para ampliar">`;
     caixa.querySelector('img').onclick = () => caixa.classList.toggle('zoom');
-    caixa.querySelector('img').onerror = () => { caixa.innerHTML = '<span class="sem">Não foi possível carregar a foto.</span>'; };
     const aba = m.querySelector('#vf-abrir');
     aba.classList.toggle('hidden', lista[i].startsWith('data:')); // foto ainda não enviada: sem link
     aba.href = lista[i];
+    caixa.querySelector('img').onerror = async () => { caixa.innerHTML = `<span class="sem">${esc(await motivoFoto(lista[i]))}</span>`; aba.classList.add('hidden'); };
     m.querySelector('#vf-ant').disabled = i === 0;
     m.querySelector('#vf-prox').disabled = i === lista.length - 1;
   };
@@ -562,7 +572,11 @@ function telaNova(id) {
       ${i >= salvasV.length ? '<span class="thumb-nova">nova</span>' : ''}
       <button type="button" class="x" data-rm="${i}" title="Remover" aria-label="Remover foto ${i + 1}">×</button></div>`).join('')
       || '<span class="muted small">Nenhuma foto anexada.</span>';
-    $('n-fotos').querySelectorAll('[data-ver]').forEach(im => im.onclick = () => verFotos(todasFotos(), Number(im.dataset.ver)));
+    $('n-fotos').querySelectorAll('[data-ver]').forEach(im => {
+      im.onclick = () => verFotos(todasFotos(), Number(im.dataset.ver));
+      // comprovante que não existe mais: aviso no lugar da imagem quebrada (o × continua para remover)
+      im.onerror = () => im.replaceWith(Object.assign(document.createElement('span'), { className: 'thumb-sem', textContent: 'Foto indisponível' }));
+    });
     $('n-fotos').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
       const i = Number(b.dataset.rm);
       if (i >= salvasV.length) { novas.splice(i - salvasV.length, 1); return desenhaFotos(); }

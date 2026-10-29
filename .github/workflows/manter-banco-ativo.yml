@@ -1,7 +1,7 @@
 # Mantém ativo o banco gratuito do Supabase, que é pausado depois de 7 dias sem uso.
 # A cada 2 dias, chama o sistema no Render (/health?banco=1), que faz uma leitura leve no banco.
 # Se o Render estiver "dormindo", o primeiro acesso o acorda (pode levar até ~1 minuto): por isso a espera
-# longa e as novas tentativas. Se falhar mesmo assim, o GitHub manda e-mail para quem cuida do repositório.
+# de até 2 min por tentativa e as novas tentativas. Se falhar mesmo assim, o GitHub manda e-mail para quem cuida do repositório.
 # Atenção: o GitHub desliga rotinas agendadas de repositórios sem commits há 60 dias (avisa por e-mail antes);
 # para religar, aba Actions > "Manter banco ativo" > Enable workflow.
 name: Manter banco ativo
@@ -17,10 +17,10 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12 # 4 tentativas de até 2 min + 3 esperas de 1 min = 11 min no pior caso
     steps:
       - name: Chamar o sistema (leitura leve no banco)
         run: |
-          curl --fail --silent --show-error --max-time 180 \
+          curl --fail --silent --show-error --max-time 120 \
                --retry 3 --retry-delay 60 --retry-all-errors \
                "https://ajudadecustos.onrender.com/health?banco=1"

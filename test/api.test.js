@@ -12,7 +12,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
-const { paraNumero } = require('../services/store');
+const { paraNumero, configBanco, criarStore } = require('../services/store');
 const { lerDataUrl, assinar } = require('../services/fotos');
 
 const PORTA = 3900 + Math.floor(Math.random() * 90);
@@ -94,6 +94,40 @@ test('paraNumero entende ponto e vírgula', () => {
   assert.equal(paraNumero('R$ 12'), 12);
   assert.equal(paraNumero(''), 0);
   assert.equal(paraNumero('abc'), 0);
+});
+test('configuração do banco: recusa o que é perigoso e explica o que está errado', () => {
+  const U = 'postgresql://u:p@host:5432/db';
+  assert.throws(() => configBanco({ url: U, schema: 'public' }), /DATABASE_SCHEMA/);
+  assert.throws(() => configBanco({ url: U, schema: 'pg_algo' }), /DATABASE_SCHEMA/);
+  assert.throws(() => configBanco({ url: 'notaurl', schema: 'ajuda' }), /DATABASE_URL inválida/);
+  assert.throws(() => configBanco({ url: 'postgresql://u:a#b@host/db', schema: 'ajuda' }), /DATABASE_URL inválida/);
+  assert.throws(() => configBanco({ url: U, schema: 'ajuda', producao: true }), /DATABASE_SSL_CA é obrigatório/);
+  assert.throws(() => configBanco({ url: U, schema: 'ajuda', ca: '/nao/existe.crt' }), /arquivo do certificado não encontrado/);
+  // com certificado: o sslmode do endereço não passa por cima dele, e o texto colado com espaços é arrumado
+  const pem = '-----BEGIN CERTIFICATE----- ' + 'QUJD'.repeat(40) + ' -----END CERTIFICATE-----';
+  const c = configBanco({ url: U + '?sslmode=no-verify&application_name=x', schema: 'ajuda', ca: pem });
+  assert.ok(!/sslmode/.test(c.connectionString) && /application_name=x/.test(c.connectionString));
+  assert.match(c.ssl.ca, /^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE-----$/);
+  assert.equal(c.connectionTimeoutMillis, 10000);
+  // nenhuma mensagem mostra a senha
+  try { configBanco({ url: 'postgresql://u:segredo#1@host/db', schema: 'ajuda' }); } catch (e) { assert.ok(!e.message.includes('segredo')); }
+});
+test('várias gravações juntas (planilha/memória): erro no meio desfaz o que já tinha sido gravado', async () => {
+  const s = criarStore({}); // memória (a planilha usa o mesmo mecanismo)
+  await s.add('Funcoes', { id: 'f1', nome: 'A' });
+  await assert.rejects(s.transacao(async tx => {
+    await tx.add('Funcoes', { id: 'f2', nome: 'B' });
+    await tx.update('Funcoes', 'f1', { nome: 'Z' });
+    await tx.remove('Funcoes', 'f1');
+    throw new Error('falha simulada');
+  }), /falha simulada/);
+  assert.deepEqual((await s.list('Funcoes')).map(f => [f.id, f.nome]), [['f1', 'A']]);
+});
+test('texto com caractere invisível (NUL) é limpo, e não vira erro 500', async () => {
+  const a = await adminLogado();
+  const r = await a.post('/api/admin/colaboradores', { nome: 'Nulo\u0000Teste', usuario: 'nulo' + Date.now().toString(36), funcao: 'Vendedor' });
+  assert.equal(r.status, 201);
+  assert.equal(r.dados.nome, 'NuloTeste');
 });
 test('assinatura do Cloudinary segue o formato documentado', () => {
   // parâmetros em ordem alfabética + segredo, SHA-1

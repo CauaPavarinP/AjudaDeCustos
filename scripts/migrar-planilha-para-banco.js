@@ -24,32 +24,39 @@ async function main() {
     await planilha.init();
     await banco.init();
     const tabelas = Object.keys(TABELAS);
+    const schema = env.DATABASE_SCHEMA || 'ajuda';
 
-    // Não mistura dados: só copia num banco vazio (ou apagado de propósito)
-    const jaTem = [];
-    for (const t of tabelas) { const n = (await banco.list(t)).length; if (n) jaTem.push(`${t} (${n})`); }
-    if (jaTem.length && !apagarAntes) {
-      throw new Error(`O banco já tem dados: ${jaTem.join(', ')}. Rode com --apagar-antes para apagar e copiar de novo.`);
-    }
-    if (jaTem.length) {
-      for (const t of tabelas) await banco.pool.query(`TRUNCATE "${env.DATABASE_SCHEMA || 'ajuda'}"."${t}"`);
-      console.log('Dados que estavam no banco apagados.');
-    }
-
-    let erros = 0;
+    // Lê tudo da planilha antes e confere IDs repetidos (o banco não aceita; a planilha usaria só o primeiro)
+    const dados = {};
     for (const t of tabelas) {
-      const linhas = await planilha.list(t);
-      for (const l of linhas) await banco.add(t, l); // na mesma ordem da planilha
-      const noBanco = (await banco.list(t)).length;
-      const ok = noBanco === linhas.length;
-      if (!ok) erros++;
-      console.log(`${ok ? 'OK  ' : 'ERRO'} ${t.padEnd(14)} planilha ${String(linhas.length).padStart(4)} · banco ${String(noBanco).padStart(4)}`);
+      dados[t] = await planilha.list(t);
+      const vistos = new Set(), repetidos = new Set();
+      for (const l of dados[t]) (vistos.has(l.id) ? repetidos : vistos).add(l.id);
+      if (repetidos.size) throw new Error(`a aba ${t} tem ID repetido: ${[...repetidos].join(', ')}. Corrija na planilha (cada linha precisa de um ID único) e rode de novo.`);
     }
-    if (erros) throw new Error('Alguma tabela ficou com quantidade diferente. Rode de novo com --apagar-antes.');
+
+    // Copia tudo numa transação só: se qualquer linha der erro, nada fica gravado (o banco não fica pela metade)
+    await banco.transacao(async tx => {
+      const jaTem = [];
+      for (const t of tabelas) { const n = (await tx.list(t)).length; if (n) jaTem.push(`${t} (${n})`); }
+      if (jaTem.length && !apagarAntes) {
+        throw new Error(`O banco já tem dados: ${jaTem.join(', ')}. Rode com --apagar-antes para apagar e copiar de novo.`);
+      }
+      if (jaTem.length) for (const t of tabelas) await tx.sql(`TRUNCATE "${schema}"."${t}"`);
+      for (const t of tabelas) {
+        for (const l of dados[t]) { // na mesma ordem da planilha
+          try { await tx.add(t, l); } catch (e) { throw new Error(`aba ${t}, linha de ID ${l.id}: ${e.message}`); }
+        }
+        const noBanco = (await tx.list(t)).length;
+        if (noBanco !== dados[t].length) throw new Error(`a aba ${t} ficou com ${noBanco} linhas no banco, mas tem ${dados[t].length} na planilha.`);
+        console.log(`OK   ${t.padEnd(15)} planilha ${String(dados[t].length).padStart(4)} · banco ${String(noBanco).padStart(4)}`);
+      }
+    }, { trava: 'migracao' });
     console.log('\nPronto: tudo copiado. A planilha não foi alterada.');
+    console.log('Se o sistema já estiver rodando com este banco, reinicie-o para ele ler os dados copiados.');
   } finally {
     await banco.pool.end();
   }
 }
 
-main().catch(err => { console.error('\nNão foi possível migrar:', err.message); process.exit(1); });
+main().catch(err => { console.error('\nNão foi possível migrar (nada foi gravado no banco):', err.message); process.exit(1); });
