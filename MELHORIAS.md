@@ -35,7 +35,7 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 - [ ] PDF: nome e cidade longos sem cortar com "…" (#21).
 - [ ] PDF: letras estrangeiras e emoji sem virar "?" (#22).
 - [ ] PDF mensal avisar quando há despesas em análise fora do total (#23).
-- [ ] Excel de despesas: "Total" separado por status ou rotulado (#24).
+- [x] Excel de despesas: "Total" separado por status ou rotulado (#24).
 - [ ] Backup: tirar colunas antigas e mostrar o período em vez do código (#25).
 
 ## App do colaborador

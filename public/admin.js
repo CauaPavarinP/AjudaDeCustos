@@ -118,12 +118,12 @@ const optsMes = (sel, todos = true) => (todos ? opt('', 'Todos', sel) : '') + ME
 const funcoesFiltro = () => [...new Set([...D.funcoes, ...linhas().map(r => r.funcao).filter(Boolean)])];
 const corFuncao = f => CORES_FUNCAO[Math.max(0, D.funcoes.indexOf(f)) % CORES_FUNCAO.length];
 
-// Exportação para Excel (.xlsx): ver public/xlsx.js. A última linha (total) sai em negrito.
+// Exportação para Excel (.xlsx): ver public/xlsx.js. As linhas de total (no fim) saem em negrito.
 const col = (titulo, largura = 14, moeda = false) => ({ titulo, largura, moeda });
 const colsCat = () => [...CAT.map(c => col(c.nome, 13, true)), col('Total', 13, true)];
 const n2 = v => r2(v || 0);
 const mesTxt = ym => ym.slice(5) + '/' + ym.slice(0, 4);
-function exportar(nome, aba, colunas, linhas) { baixarXlsx(nome, [{ nome: aba, colunas, linhas, totalNoFim: true }]); }
+function exportar(nome, aba, colunas, linhas, totais = 1) { baixarXlsx(nome, [{ nome: aba, colunas, linhas, totalNoFim: totais }]); }
 
 // ---------- modal ----------
 function abrirModal(html, classe = '') { $('modal').innerHTML = `<div class="card modal ${classe}">${html}</div>`; $('modal').classList.remove('hidden'); return $('modal'); }
@@ -436,12 +436,16 @@ function telaDespesas() {
   }));
   agir('data-dap', 'aprovar'); agir('data-drc', 'recusar'); agir('data-dre', 'reabrir');
   document.querySelectorAll('tr[data-desp]').forEach(tr => tr.addEventListener('click', () => modalNota(acha(tr.dataset.desp))));
+  // Totais separados por status: "aprovadas" bate com o Lançamentos; em análise e recusadas não se misturam
+  const porStatus = st => rows.filter(d => d.status === st);
+  const totaisPorStatus = [['Total aprovadas', porStatus(STATUS.aprovada)], ['Total em análise', porStatus(STATUS.analise)],
+    ...(porStatus(STATUS.recusada).length ? [['Total recusadas (não entram no pagamento)', porStatus(STATUS.recusada)]] : [])];
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
     [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
     [...rows.map(d => { const p = periodoDaDespesa(d); return [dmy(d.data), d.colaborador, d.funcao, d.categoria, n2(d.valor), d.observacao, statusVisto(d), quando(d.avaliadoEm),
       p ? `${rotPeriodo(p)} · ${d.status === STATUS.recusada ? 'enviada, recusada (não entra no pagamento)' : p.status === PAGO ? 'paga ' + quandoPaga(p)
         : d.status === STATUS.analise ? 'enviada, aguardando análise' : 'enviada, aguardando pagamento'}` : antiga(d) ? 'antes do controle de pagamentos' : d.status !== STATUS.recusada ? 'não enviada' : '', d.foto ? 'Sim' : 'Não']; }),
-      ['Total', '', '', '', soma(rows), '', '', '', '', '']]));
+      ...totaisPorStatus.map(([rot, l]) => [rot, '', '', '', soma(l), '', '', '', '', ''])], totaisPorStatus.length));
 }
 
 // ======================= 02 · NOVA PRESTAÇÃO =======================
