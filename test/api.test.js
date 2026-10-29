@@ -264,6 +264,9 @@ test('despesa: validações', async () => {
   assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 99999 })).status, 400);
   // data com texto sobrando depois não é cortada e aceita
   assert.equal((await c.post('/api/despesas', { data: ontem() + 'xyz', categoria: 'Hotel', valor: 10 })).status, 400);
+  // valor só como número: texto como "0.500" não vira R$ 500
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: '0.500' })).status, 400);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: '10' })).status, 400);
 });
 
 test('fluxo completo: envia com foto, aprova, desfaz, exclui', async () => {

@@ -15,7 +15,7 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 ## Segurança e dados
 
 - [ ] Login: o tempo de resposta não deve revelar se o usuário existe (#7).
-- [ ] API só aceita valor como número: hoje `"0.500"` vira 500 (#11).
+- [x] API só aceita valor como número: hoje `"0.500"` vira 500 (#11).
 - [x] Validar a data inteira antes de cortar: hoje `2026-10-20xyz` é aceita (#12).
 - [x] Editar colaborador pela API sem os dados bancários não deve apagá-los (#13).
 - [x] `jaPagas` só aceita `true` (#14). Feito junto com o item 1 da auditoria.

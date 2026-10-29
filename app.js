@@ -2,7 +2,7 @@ require('dotenv').config({ quiet: true });
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const { criarStore, novoId, paraNumero } = require('./services/store');
+const { criarStore, novoId } = require('./services/store');
 const { resumoErro, ondeAconteceu } = require('./services/erros');
 const { criarFotos, lerDataUrl } = require('./services/fotos');
 const Regras = require('./public/regras');
@@ -130,7 +130,8 @@ const valorMaximoTxt = () => VALOR_MAXIMO.toLocaleString('pt-BR', { style: 'curr
 const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
 const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const r2 = n => Math.round(n * 100) / 100;
-const valor = v => r2(paraNumero(v));
+// Valor vindo da API: só número (o app e o painel mandam número). Texto como "0.500" não vira 500.
+const valor = v => (typeof v === 'number' && Number.isFinite(v) ? r2(v) : NaN);
 const iguais = (a, b) => {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
@@ -525,8 +526,8 @@ async function validarPrestacao(body, atual) {
     : { colaboradorId: colab.id, colaborador: colab.nome, funcao: colab.funcao, dataInicial, dataFinal, mesRef };
   let total = 0;
   for (const c of CATEGORIAS) {
-    const v = valor(body[c.chave]);
-    if (v < 0) return { erro: `Valor inválido em ${c.nome}.` };
+    const v = body[c.chave] == null ? 0 : valor(body[c.chave]); // categoria não enviada = 0
+    if (!(v >= 0)) return { erro: `Valor inválido em ${c.nome}.` };
     if (v > VALOR_MAXIMO) return { erro: `O valor de ${c.nome} passa do limite de ${valorMaximoTxt()} por categoria. Confira o que foi digitado.` };
     p[c.chave] = v; total += v;
   }
