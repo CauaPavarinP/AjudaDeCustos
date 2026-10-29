@@ -19,7 +19,22 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 - **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
 - **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login no mesmo aparelho, ou de 20 tentativas erradas na mesma conta vindas de qualquer lugar. Trocar o `SESSION_SECRET` desconecta todo mundo.
 - **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico.
-- **Pagamentos por semana:** o sistema separa sozinho as despesas do celular por colaborador e semana (segunda a domingo, pela data da nota); ninguém precisa "fechar" período. Na aba **Pagamentos** do painel, cada semana com despesas não pagas aparece como "Aguardando pagamento", com "Ver notas" (aprovar/recusar), "PDF" (folha da semana; se paga, com o carimbo "PAGO EM"), "📋 PIX" e "✔ Pagar" (só depois de analisar todas as notas da semana; grava o pagamento com o valor pago na aba Periodos e liga cada despesa paga a ele). "Desfazer pagamento" volta as despesas para "Aguardando pagamento". Uma nota lançada depois que a semana foi paga aparece numa nova linha da mesma semana, paga à parte. Despesas pagas aparecem como **"Paga"** no app e no painel e não podem ser alteradas; no app, o card **"A receber"** mostra o total aprovado ainda não pago. Prestações lançadas no painel não entram nos pagamentos por semana. **Despesas antigas:** na primeira vez que o servidor sobe com esta versão, ele grava a data de início do controle de pagamentos (aba Config). Despesas lançadas antes disso não entram sozinhas nos pagamentos (podem já ter sido reembolsadas): a aba Pagamentos mostra um aviso e o Maurício decide, por colaborador, "Já foram pagas" ou "Incluir para pagar".
+- **Períodos e pagamento:**
+  - **No app:** o colaborador lança as notas e, quando quiser (ex.: de 18 a 27), toca em **"Fechar período e enviar"**. Todas as despesas ainda não enviadas, em análise ou aprovadas, viram um período, com as datas da nota mais antiga à mais recente. Elas ficam travadas: não dá mais para excluir nem trocar a foto. Despesas lançadas depois entram no próximo período.
+  - **No painel, aba Pagamentos:** lista os períodos enviados, com:
+    - "Ver notas", para aprovar ou recusar;
+    - "PDF", a folha do período, com o carimbo "PAGO EM" quando pago;
+    - "📋 PIX";
+    - "✔ Pagar", só depois de analisar todas as notas; grava o valor pago, que é a soma das aprovadas;
+    - "Reabrir", que desfaz o envio e devolve as despesas ao colaborador como não enviadas;
+    - "Desfazer pagamento", que volta o período para "Aguardando pagamento".
+  - O Maurício também pode fechar o período por um colaborador, no botão **"Fechar período por um colaborador"**.
+  - Despesas de período pago aparecem como **"Paga"** no app e no painel e não podem ser alteradas.
+  - Prestações lançadas no painel não entram nos períodos.
+- **Despesas antigas:** na primeira vez que o servidor sobe com o controle de pagamentos, ele grava a data de início (aba Config). Despesas aprovadas antes disso não entram sozinhas num período, porque podem já ter sido reembolsadas. A aba Pagamentos mostra um aviso, e o Maurício decide por colaborador:
+  - **"Já foram pagas"**: viram um pagamento marcado como pago antes do sistema;
+  - **"Incluir para pagar"**: viram um período enviado.
+- **Pagamentos já feitos por semana** (versão anterior) continuam registrados como períodos pagos. Despesas que ainda não tinham sido pagas aparecem como "não enviadas", e o colaborador as envia fechando o período.
 - **PDF:** no "Resumo por colaborador", o botão "Exportar PDF" gera a folha "Prestação de contas" (mesmo modelo da folha em papel) do colaborador, ano e mês escolhidos (mês "Todos" = o ano inteiro): uma página por mês com gasto, com o quadro por categoria e o total. Telefone, cidade e UF vêm do cadastro do colaborador (campos opcionais em Colaboradores); se estiverem vazios, saem em branco para preencher à mão. Embaixo do quadro saem os dados bancários do colaborador (banco, agência, conta, CPF e PIX), também opcionais no cadastro; só aparecem as linhas preenchidas. Esses dados ficam só no painel (o app do colaborador não os recebe) e entram no backup — guarde o arquivo de backup em local de acesso restrito. No painel, "Baixar backup" (ao lado do botão Sair) gera um `.xlsx` com todas as abas (sem as senhas).
 - **Foto da nota (opcional):** no celular, "Tirar foto" (câmera) ou "Galeria". A foto é reduzida no próprio celular antes de enviar. Enquanto a despesa está em análise, o colaborador pode adicionar ou trocar a foto no detalhe. No painel, "📷 Ver nota" abre a foto (clique para ampliar) ao lado dos dados, com Aprovar e Recusar. As fotos ficam no Cloudinary em modo privado: só abrem pelo sistema, para quem está logado.
 - **Comprovantes da prestação:** na Nova prestação (ou ao editar), "📎 Anexar fotos das notas" aceita até 10 fotos (JPG/PNG, da pasta do computador). As fotos novas são enviadas ao salvar; dá para ver em tamanho grande, navegar entre elas e remover. Nos Lançamentos, 📎N mostra quantas fotos a prestação tem.
@@ -129,7 +144,7 @@ public/index.html   app do colaborador (celular)
 public/app.js
 public/admin.html   painel do Maurício
 public/admin.js
-public/regras.js    regras usadas pelo servidor E pelas telas (status, semana de pagamento, despesa antiga)
+public/regras.js    regras usadas pelo servidor E pelas telas (status, período enviado/pago, despesa antiga)
 public/xlsx.js      gera os arquivos Excel (.xlsx) no navegador
 public/pdf.js       gera o PDF "Prestação de contas" no navegador
 public/dialogo.js   janelas de aviso e confirmação
