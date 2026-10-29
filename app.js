@@ -84,7 +84,11 @@ const COOKIE = 'ajudacusto.s';
 const DURACAO_MS = 12 * 60 * 60 * 1000;
 const hmac = txt => crypto.createHmac('sha256', SEGREDO).update(txt).digest('base64url');
 const versaoSenha = hash => hmac('v:' + hash).slice(0, 16);
-const versaoAdmin = () => versaoSenha('admin:' + (process.env.ADMIN_USER || 'admin') + '\n' + (process.env.ADMIN_PASSWORD || 'admin'));
+// Administrador principal: o login de ADMIN_USER/ADMIN_PASSWORD (variáveis do Render). Não fica na tabela, não pode
+// ser desativado pelo painel e é o único que cadastra outros administradores (tabela Administradores).
+const PRINCIPAL = 'principal';
+const ADMIN_USER = () => process.env.ADMIN_USER || 'admin';
+const versaoAdmin = () => versaoSenha('admin:' + ADMIN_USER() + '\n' + (process.env.ADMIN_PASSWORD || 'admin'));
 
 function lerSessao(req) {
   const bruto = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='));
@@ -146,10 +150,11 @@ function confereSenha(senha, guardado) {
   const x = crypto.scryptSync(String(senha), salt, 32), y = Buffer.from(h, 'hex');
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
-function senhaTemporaria() {
+function senhaTemporaria(tamanho = 6) {
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
-  return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
+  return Array.from({ length: tamanho }, () => abc[crypto.randomInt(abc.length)]).join('');
 }
+const SENHA_ADMIN_MIN = 8; // administrador vê tudo (inclusive dados bancários): senha mais longa que a do colaborador
 // fotoV: "versão" da foto (muda quando a foto é trocada). Vai no endereço da imagem para o navegador
 // não mostrar a foto antiga guardada em cache. É um resumo da referência, que nunca sai do servidor.
 const versaoFoto = ref => (ref ? crypto.createHash('sha256').update(String(ref)).digest('hex').slice(0, 10) : '');
@@ -207,12 +212,26 @@ const exigeColab = wrap(async (req, res, next) => {
   req.colab = c;
   next();
 });
-const exigeAdmin = (req, res, next) => {
+// req.admin = quem está logado no painel ({ id, nome, usuario, principal }); o nome vai em "aprovado por", "pago por"...
+const exigeAdmin = wrap(async (req, res, next) => {
   const s = req.sessao;
-  if (s.a && s.av === versaoAdmin()) return next();
+  if (s.a === PRINCIPAL || s.a === 1) { // 1: sessões abertas antes desta versão (só existia o principal)
+    if (s.av === versaoAdmin()) {
+      req.admin = { id: PRINCIPAL, nome: ADMIN_NOME, usuario: ADMIN_USER(), principal: true };
+      return next();
+    }
+  } else if (s.a) {
+    const a = (await store.list('Administradores')).find(x => x.id === s.a);
+    if (a && a.ativo && s.av === versaoSenha(a.senhaHash)) {
+      req.admin = { id: a.id, nome: a.nome, usuario: a.usuario, principal: false };
+      return next();
+    }
+  }
   if (s.a) { sairAdmin(s); gravarSessao(res, s); }
   erro(res, 'Faça login.', 401);
-};
+});
+const exigePrincipal = (req, res, next) =>
+  (req.admin && req.admin.principal ? next() : erro(res, 'Só o administrador principal pode cadastrar e alterar administradores.', 403));
 
 // ---------------- público ----------------
 // /health?banco=1 também faz uma leitura leve nos dados (tabela Config, uma linha). Chamado a cada 2 dias pelo
@@ -353,19 +372,88 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
 }));
 
 // ================= ADMINISTRADOR (Maurício) =================
-app.post('/api/admin/login', (req, res) => {
-  const chave = 'a:' + req.ip, conta = 'A:admin';
+// Entra como o principal (variáveis do ambiente) ou como um administrador da tabela
+app.post('/api/admin/login', wrap(async (req, res) => {
+  const usuario = texto(req.body.usuario, 100), senha = String(req.body.senha ?? '');
+  const chave = 'a:' + req.ip, conta = 'A:' + usuario.toLowerCase();
   if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
-  const ok = iguais(texto(req.body.usuario, 100), process.env.ADMIN_USER || 'admin')
-    && iguais(String(req.body.senha ?? ''), process.env.ADMIN_PASSWORD || 'admin');
-  if (!ok) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  let entrou = null;
+  if (iguais(usuario, ADMIN_USER()) && iguais(senha, process.env.ADMIN_PASSWORD || 'admin')) entrou = { a: PRINCIPAL, av: versaoAdmin() };
+  else {
+    const a = (await store.list('Administradores')).find(x => x.usuario === usuario.toLowerCase() && x.ativo);
+    if (a && confereSenha(senha, a.senhaHash)) entrou = { a: a.id, av: versaoSenha(a.senhaHash) };
+  }
+  if (!entrou) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave, conta);
-  Object.assign(req.sessao, { a: 1, av: versaoAdmin(), ae: Date.now() + DURACAO_MS });
+  Object.assign(req.sessao, entrou, { ae: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
-});
+}));
 app.post('/api/admin/logout', (req, res) => { sairAdmin(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
-app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }));
+app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: req.admin.nome, usuario: req.admin.usuario, principal: req.admin.principal }));
+// Administrador da tabela troca a própria senha (o principal troca no Render, em ADMIN_PASSWORD)
+app.post('/api/admin/me/senha', exigeAdmin, wrap(async (req, res) => {
+  if (req.admin.principal) return erro(res, 'A senha do administrador principal é trocada no Render (variável ADMIN_PASSWORD).');
+  const a = (await store.list('Administradores', { fresco: true })).find(x => x.id === req.admin.id);
+  if (!a || !confereSenha(req.body.atual, a.senhaHash)) return erro(res, 'A senha atual não confere.');
+  const nova = String(req.body.nova ?? '');
+  if (nova.length < SENHA_ADMIN_MIN) return erro(res, `A nova senha precisa ter pelo menos ${SENHA_ADMIN_MIN} caracteres.`);
+  const senhaHash = hashSenha(nova);
+  await store.update('Administradores', a.id, { senhaHash });
+  req.sessao.av = versaoSenha(senhaHash); // mantém este navegador logado; os outros com a senha antiga saem
+  gravarSessao(res, req.sessao);
+  res.json({ ok: true });
+}));
+
+// ---- administradores (só o principal) ----
+const publicoAdmin = a => ({ id: a.id, nome: a.nome, usuario: a.usuario, ativo: a.ativo, criadoEm: a.criadoEm, criadoPor: a.criadoPor });
+async function validarAdmin(body, idAtual) {
+  const nome = texto(body.nome, 80), usuario = texto(body.usuario, 30).toLowerCase();
+  if (nome.length < 2) return { erro: 'Informe o nome.' };
+  if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
+  if (usuario === ADMIN_USER().toLowerCase()) return { erro: 'Esse usuário já é o do administrador principal.' };
+  const todos = await store.list('Administradores', { fresco: true });
+  if (todos.some(a => a.usuario === usuario && a.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
+  return { nome, usuario };
+}
+app.get('/api/admin/administradores', exigeAdmin, exigePrincipal, wrap(async (req, res) => {
+  const lista = (await store.list('Administradores')).map(publicoAdmin);
+  res.json(lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')));
+}));
+app.post('/api/admin/administradores', exigeAdmin, exigePrincipal, wrap(async (req, res) => {
+  const senha = senhaTemporaria(SENHA_ADMIN_MIN + 2);
+  const r = await comTrava('administradores', async () => { // um cadastro de cada vez: não repete usuário
+    const v = await validarAdmin(req.body);
+    if (v.erro) return v;
+    const a = { id: novoId(), ...v, ativo: true, senhaHash: hashSenha(senha), criadoEm: new Date().toISOString(), criadoPor: req.admin.nome };
+    await store.add('Administradores', a);
+    return a;
+  });
+  if (r.erro) return erro(res, r.erro);
+  res.status(201).json({ ...publicoAdmin(r), senhaTemporaria: senha });
+}));
+app.put('/api/admin/administradores/:id', exigeAdmin, exigePrincipal, wrap(async (req, res) => {
+  const id = String(req.params.id), campos = {};
+  if ('ativo' in req.body) campos.ativo = req.body.ativo === true;
+  let senha;
+  if (req.body.novaSenha === true) { senha = senhaTemporaria(SENHA_ADMIN_MIN + 2); campos.senhaHash = hashSenha(senha); }
+  const a = await comTrava('administradores', async () => {
+    if ('nome' in req.body) {
+      const v = await validarAdmin(req.body, id);
+      if (v.erro) return v;
+      Object.assign(campos, v);
+    }
+    return store.update('Administradores', id, campos);
+  });
+  if (a && a.erro) return erro(res, a.erro);
+  if (!a) return erro(res, 'Administrador não encontrado.', 404);
+  res.json({ ...publicoAdmin(a), ...(senha ? { senhaTemporaria: senha } : {}) });
+}));
+app.delete('/api/admin/administradores/:id', exigeAdmin, exigePrincipal, wrap(async (req, res) => {
+  const r = await store.remove('Administradores', String(req.params.id));
+  if (!r) return erro(res, 'Administrador não encontrado.', 404);
+  res.json({ ok: true }); // o nome dele continua nos registros antigos ("aprovado por", "pago por")
+}));
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
 app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
@@ -585,7 +673,7 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
     return { d: await store.update('Despesas', id, {
       status,
       avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
-      avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
+      avaliadoPor: acao === 'reabrir' ? '' : req.admin.nome,
     }, a => pode(a) && naoPaga(a)) };
   });
   if (r.erro) return erro(res, r.erro, r.status);
@@ -614,7 +702,7 @@ app.post('/api/admin/pagamentos', exigeAdmin, wrap(async (req, res) => {
     if (!notas.length) return { erro: 'Não há despesas aprovadas a pagar nesta semana.' };
     const agora = new Date().toISOString();
     const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: semana, dataFinal: fimSemana(semana), status: PAGO,
-      fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: ADMIN_NOME, valorPago: 0 };
+      fechadoEm: agora, fechadoPor: req.admin.nome, pagoEm: agora, pagoPor: req.admin.nome, valorPago: 0 };
     await store.add('Periodos', pg);
     let soma = 0, n = 0;
     for (const d of notas) {
@@ -645,7 +733,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
     }
     const datas = lista.map(d => d.data).sort(), agora = new Date().toISOString();
     const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: datas[0], dataFinal: datas[datas.length - 1], status: PAGO,
-      fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: `${ADMIN_NOME} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
+      fechadoEm: agora, fechadoPor: req.admin.nome, pagoEm: agora, pagoPor: `${req.admin.nome} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
     await store.add('Periodos', pg);
     let soma = 0, n = 0;
     for (const d of lista) { const ok = await store.update('Despesas', d.id, { periodoId: pg.id }, livre); if (ok) { soma += ok.valor; n++; } }

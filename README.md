@@ -76,6 +76,16 @@ A planilha só é **lida**: nada nela é criado, alterado ou apagado. No fim, o 
 
 **Atenção:** com o `DATABASE_URL` no `.env`, o que você fizer localmente grava nesse banco. Use um projeto do Supabase de teste, e não o de produção. Os testes automáticos (`npm test`) continuam em memória. Para rodá-los num banco **de teste**, use `TEST_DATABASE_URL=... npm test`, que apaga e recria os schemas `teste_a` e `teste_b`.
 
+## Administradores do painel
+
+- **Administrador principal:** o login das variáveis `ADMIN_USER`/`ADMIN_PASSWORD`. Para trocar a senha dele, altere `ADMIN_PASSWORD` no Render. Ele não pode ser desativado pelo painel, então sempre existe um jeito de entrar, e é o **único** que cadastra outros administradores.
+- **Outros administradores:** o principal cadastra em **Colaboradores → Administradores do painel**.
+  - A senha inicial, com 10 caracteres, aparece uma vez só.
+  - Cada administrador entra em `/admin` com usuário e senha próprios e troca a senha em **"Trocar senha"**, embaixo do nome. O mínimo é 8 caracteres.
+  - Eles fazem tudo no painel, menos mexer em administradores.
+  - "Aprovado por" e "pago por" registram o nome de quem fez.
+- Ficam na aba/tabela `Administradores` (ID, Nome, Usuario, Ativo, SenhaHash, CriadoEm, CriadoPor), criada sozinha. O backup do painel inclui essa lista, sem as senhas.
+
 ## Variáveis de ambiente
 
 Veja `.env.example`. No Render, cadastre em **Environment → Environment Variables**:
@@ -84,8 +94,8 @@ Veja `.env.example`. No Render, cadastre em **Environment → Environment Variab
 |---|---|
 | `NODE_ENV` | `production` |
 | `SESSION_SECRET` | texto longo e aleatório |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | login do painel `/admin` |
-| `ADMIN_NOME` | opcional; nome exibido no painel e em "aprovada por" (padrão: Maurício) |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | login do **administrador principal** do painel `/admin` (os outros administradores são cadastrados no próprio painel) |
+| `ADMIN_NOME` | opcional; nome do administrador principal, exibido no painel e em "aprovada por"/"pago por" (padrão: Maurício) |
 | `SPREADSHEET_ID` | ID da planilha (trecho da URL entre `/d/` e `/edit`) |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | e-mail da Service Account |
 | `GOOGLE_PRIVATE_KEY` | chave privada da Service Account (pode colar com os `\n`) |

@@ -4,7 +4,7 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 
 ## Prioridade alta
 
-- [ ] **Outro login de administrador.** Hoje existe um único login de admin (`ADMIN_USER`/`ADMIN_PASSWORD` no Render) e tudo fica registrado como "Maurício".
+- [x] **Outro login de administrador.** *Feito na branch `claude/banco-de-dados` (tabela Administradores; funciona com planilha ou banco).* Hoje existe um único login de admin (`ADMIN_USER`/`ADMIN_PASSWORD` no Render) e tudo fica registrado como "Maurício".
   - Criar logins separados, cada um com usuário e senha próprios.
   - Mostrar o nome certo em "aprovado por" e "pago por".
   - Permitir desativar um admin sem afetar o outro.

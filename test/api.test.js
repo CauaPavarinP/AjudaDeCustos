@@ -117,6 +117,50 @@ test('health e versão', async () => {
   assert.equal(b.dados.banco, 'ok');
 });
 
+test('administradores: só o principal cadastra; cada um entra com a própria senha e assina o que faz', async () => {
+  const p = await adminLogado();
+  assert.equal((await p.get('/api/admin/me')).dados.principal, true);
+  // usuário do principal e usuário repetido são recusados
+  assert.equal((await p.post('/api/admin/administradores', { nome: 'Outro', usuario: 'admin' })).status, 400);
+  const novo = await p.post('/api/admin/administradores', { nome: 'Ana Souza', usuario: 'ana.souza' });
+  assert.equal(novo.status, 201);
+  assert.ok(novo.dados.senhaTemporaria.length >= 8);
+  assert.equal(novo.dados.senhaHash, undefined);
+  assert.equal((await p.post('/api/admin/administradores', { nome: 'Ana 2', usuario: 'ana.souza' })).status, 400);
+  // dois cadastros juntos com o mesmo usuário: só um entra
+  const juntos = await Promise.all([1, 2].map(() => p.post('/api/admin/administradores', { nome: 'Bia', usuario: 'bia.lima' })));
+  assert.deepEqual(juntos.map(r => r.status).sort(), [201, 400]);
+
+  // a Ana entra, vê o painel, mas não mexe em administradores
+  const ana = cliente();
+  assert.equal((await ana.post('/api/admin/login', { usuario: 'ana.souza', senha: 'errada' })).status, 401);
+  assert.equal((await ana.post('/api/admin/login', { usuario: 'ana.souza', senha: novo.dados.senhaTemporaria })).status, 200);
+  const me = (await ana.get('/api/admin/me')).dados;
+  assert.equal(me.nome, 'Ana Souza'); assert.equal(me.principal, false);
+  assert.equal((await ana.get('/api/admin/dados')).status, 200);
+  assert.equal((await ana.get('/api/admin/administradores')).status, 403);
+  assert.equal((await ana.post('/api/admin/administradores', { nome: 'X', usuario: 'xyz' })).status, 403);
+  // o que a Ana aprova fica com o nome dela
+  const { c } = await novoColaborador(p);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
+  assert.equal((await ana.post(`/api/admin/despesas/${d.id}/aprovar`)).dados.avaliadoPor, 'Ana Souza');
+
+  // troca a própria senha (mínimo 8); continua logada neste navegador
+  assert.equal((await ana.post('/api/admin/me/senha', { atual: novo.dados.senhaTemporaria, nova: 'curta' })).status, 400);
+  assert.equal((await ana.post('/api/admin/me/senha', { atual: novo.dados.senhaTemporaria, nova: 'senha-nova-123' })).status, 200);
+  assert.equal((await ana.get('/api/admin/me')).status, 200);
+  assert.equal((await p.post('/api/admin/me/senha', { atual: 'admin', nova: 'qualquer-coisa' })).status, 400); // principal troca no Render
+
+  // nova senha pelo principal derruba a sessão da Ana; desativar impede o login
+  assert.equal((await p.put(`/api/admin/administradores/${novo.dados.id}`, { novaSenha: true })).status, 200);
+  assert.equal((await ana.get('/api/admin/me')).status, 401);
+  assert.equal((await p.put(`/api/admin/administradores/${novo.dados.id}`, { ativo: false })).status, 200);
+  assert.equal((await ana.post('/api/admin/login', { usuario: 'ana.souza', senha: 'senha-nova-123' })).status, 401);
+  // excluir
+  assert.equal((await p.del(`/api/admin/administradores/${novo.dados.id}`)).status, 200);
+  assert.equal((await p.get('/api/admin/administradores')).dados.some(a => a.id === novo.dados.id), false);
+});
+
 test('login do painel: senha errada recusa, cookie adulterado não entra', async () => {
   const x = cliente();
   assert.equal((await x.post('/api/admin/login', { usuario: 'admin', senha: 'errada' })).status, 401);

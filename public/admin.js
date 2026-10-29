@@ -19,6 +19,7 @@ const CORES_FUNCAO = ['b-purple', 'b-pink', 'b-blue', 'b-amber', 'b-green', 'b-g
 const { STATUS, PAGO, PAGA, semanaDe, fimSemana, naoPaga, antesDoSistema } = Regras;
 
 let D = null;          // dados vindos do servidor
+let ME = null;         // quem está logado no painel: { nome, usuario, principal }
 let CAT = [];          // categorias
 const F = {            // filtros de cada tela (ficam guardados ao trocar de tela)
   l: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '', colab: '', busca: '' },
@@ -63,6 +64,8 @@ async function avaliarDespesa(id, acao) {
 
 async function carregar() {
   D = await api('/api/admin/dados');
+  // Só o administrador principal vê e cadastra os outros administradores
+  D.administradores = ME && ME.principal ? await api('/api/admin/administradores') : [];
   // Despesas, prestações e períodos guardam o nome da época; as telas mostram sempre o nome atual do cadastro
   // (se o colaborador foi renomeado, tudo aparece com o nome novo e a busca encontra pelo nome novo)
   const nomes = new Map(D.colaboradores.map(c => [c.id, c.nome]));
@@ -951,7 +954,8 @@ function telaColaboradores() {
           ? `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-pw="${esc(c.id)}">Nova senha</button><button class="btn xs" data-off="${esc(c.id)}">Desativar</button>`
           : `<button class="btn xs" data-ed="${esc(c.id)}">Editar</button><button class="btn xs" data-on="${esc(c.id)}">Reativar</button>`}<button class="btn xs no" data-del="${esc(c.id)}">Excluir</button></span></td></tr>`).join('')
         || '<tr class="empty-row"><td colspan="7">Nenhum colaborador cadastrado ainda.</td></tr>'}</tbody>
-    </table></div></div>`;
+    </table></div></div>
+    ${ME && ME.principal ? secaoAdministradores() : ''}`;
 
   $('k-novo').onclick = () => modalColab();
   $('k-funcao').onclick = modalFuncao;
@@ -973,11 +977,92 @@ function telaColaboradores() {
     if (!(await confirmar(`${c.nome} sai do cadastro. Isso não pode ser desfeito.\n\nSó é possível excluir quem ainda não tem nenhum lançamento.`, { titulo: 'Excluir colaborador?', ok: 'Excluir', perigo: true }))) return;
     try { await api('/api/admin/colaboradores/' + encodeURIComponent(c.id), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
   });
+  ligarAdministradores();
   document.querySelectorAll('[data-delf]').forEach(b => b.onclick = async () => {
     const f = b.dataset.delf;
     if (!(await confirmar(`A função "${f}" sai da lista de funções.`, { titulo: 'Excluir função?', ok: 'Excluir', perigo: true }))) return;
     try { await api('/api/admin/funcoes/' + encodeURIComponent(f), { method: 'DELETE' }); await carregar(); telaColaboradores(); } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
   });
+}
+
+// ---- administradores do painel (só o principal vê esta parte) ----
+// O principal é o login das variáveis do Render (ADMIN_USER/ADMIN_PASSWORD) e não aparece na lista.
+function secaoAdministradores() {
+  return `<div class="page-head" style="margin-top:8px"><div><h2>Administradores do painel</h2>
+      <p>Quem mais pode entrar neste painel. Cada um tem usuário e senha próprios, e o nome dele fica em "aprovado por" e "pago por".</p></div>
+      <div class="acts"><button class="btn" id="k-novo-adm">+ Novo administrador</button></div></div>
+    <div class="card table-card"><div class="table-wrap"><table>
+      <thead><tr><th>Nome</th><th>Usuário</th><th>Status</th><th>Ações</th></tr></thead>
+      <tbody><tr><td class="b">${esc(ME.nome)}</td><td>${esc(ME.usuario)}</td><td><span class="badge b-blue">Principal</span></td>
+        <td class="muted small">Senha trocada no Render (ADMIN_PASSWORD)</td></tr>
+      ${D.administradores.map(a => `<tr class="${a.ativo ? '' : 'off'}">
+        <td class="b">${esc(a.nome)}</td><td>${esc(a.usuario)}</td>
+        <td><span class="badge ${a.ativo ? 'b-green' : 'b-gray'}">${a.ativo ? 'Ativo' : 'Inativo'}</span></td>
+        <td><span class="chips"><button class="btn xs" data-adm-ed="${esc(a.id)}">Editar</button>${a.ativo
+          ? `<button class="btn xs" data-adm-pw="${esc(a.id)}">Nova senha</button><button class="btn xs" data-adm-off="${esc(a.id)}">Desativar</button>`
+          : `<button class="btn xs" data-adm-on="${esc(a.id)}">Reativar</button>`}<button class="btn xs no" data-adm-del="${esc(a.id)}">Excluir</button></span></td></tr>`).join('')}</tbody>
+    </table></div></div>`;
+}
+function ligarAdministradores() {
+  if (!$('k-novo-adm')) return;
+  const acha = id => D.administradores.find(a => a.id === id);
+  const url = id => '/api/admin/administradores/' + encodeURIComponent(id);
+  const depois = async () => { await carregar(); telaColaboradores(); };
+  $('k-novo-adm').onclick = () => modalAdmin();
+  document.querySelectorAll('[data-adm-ed]').forEach(b => b.onclick = () => modalAdmin(acha(b.dataset.admEd)));
+  document.querySelectorAll('[data-adm-pw]').forEach(b => b.onclick = async () => {
+    const a = acha(b.dataset.admPw);
+    if (!(await confirmar(`A senha atual de ${a.nome} deixa de funcionar, e quem estiver logado com ela sai do painel.`, { titulo: 'Gerar nova senha?', ok: 'Gerar nova senha' }))) return;
+    try { mostrarSenha(await post(url(a.id), { novaSenha: true }, 'PUT'), true); } catch (e) { avisar(e.message, 'Não foi possível gerar a senha'); }
+  });
+  const ativo = (id, v, msg, opcoes) => async () => {
+    if (!(await confirmar(msg, opcoes))) return;
+    try { await post(url(id), { ativo: v }, 'PUT'); await depois(); } catch (e) { avisar(e.message, 'Não foi possível concluir'); }
+  };
+  document.querySelectorAll('[data-adm-off]').forEach(b => { const a = acha(b.dataset.admOff); b.onclick = ativo(a.id, false, `${a.nome} não consegue mais entrar no painel.`, { titulo: 'Desativar administrador?', ok: 'Desativar', perigo: true }); });
+  document.querySelectorAll('[data-adm-on]').forEach(b => { const a = acha(b.dataset.admOn); b.onclick = ativo(a.id, true, `${a.nome} volta a conseguir entrar no painel com a senha atual.`, { titulo: 'Reativar administrador?', ok: 'Reativar' }); });
+  document.querySelectorAll('[data-adm-del]').forEach(b => b.onclick = async () => {
+    const a = acha(b.dataset.admDel);
+    if (!(await confirmar(`${a.nome} sai da lista e não consegue mais entrar. O nome dele continua nos registros antigos ("aprovado por", "pago por").`, { titulo: 'Excluir administrador?', ok: 'Excluir', perigo: true }))) return;
+    try { await api(url(a.id), { method: 'DELETE' }); await depois(); } catch (e) { avisar(e.message, 'Não foi possível excluir'); }
+  });
+}
+function modalAdmin(a) {
+  const m = abrirModal(`<h3>${a ? 'Editar administrador' : 'Novo administrador'}</h3>
+    <div class="field"><label>Nome</label><input class="input" id="m-nome" maxlength="80" value="${a ? esc(a.nome) : ''}"></div>
+    <div class="field"><label>Usuário (para entrar no painel)</label><input class="input" id="m-user" maxlength="30" value="${a ? esc(a.usuario) : ''}" placeholder="ex.: ana.souza"></div>
+    ${a ? '' : '<span class="muted small">A senha inicial é gerada automaticamente e aparece depois de salvar.</span>'}
+    <div id="m-erro" class="alert hidden"></div>
+    <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Salvar</button></div>`);
+  m.querySelector('#m-cancel').onclick = fecharModal;
+  m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
+    const corpo = { nome: m.querySelector('#m-nome').value, usuario: m.querySelector('#m-user').value };
+    try {
+      const r = a ? await post('/api/admin/administradores/' + encodeURIComponent(a.id), corpo, 'PUT') : await post('/api/admin/administradores', corpo);
+      await carregar(); telaColaboradores();
+      if (r.senhaTemporaria) mostrarSenha(r, true); else fecharModal();
+    } catch (err) { const el = m.querySelector('#m-erro'); el.textContent = err.message; el.classList.remove('hidden'); }
+  });
+  m.querySelector('#m-nome').focus();
+}
+// Administrador da tabela troca a própria senha (o principal troca no Render)
+function modalMinhaSenha() {
+  const m = abrirModal(`<h3>Trocar minha senha</h3>
+    <div class="field"><label for="m-atual">Senha atual</label><input class="input" id="m-atual" type="password" autocomplete="current-password"></div>
+    <div class="field"><label for="m-nova">Nova senha (mínimo 8 caracteres)</label><input class="input" id="m-nova" type="password" autocomplete="new-password"></div>
+    <div class="field"><label for="m-conf">Repita a nova senha</label><input class="input" id="m-conf" type="password" autocomplete="new-password"></div>
+    <div id="m-erro" class="alert hidden"></div>
+    <div class="acts"><button class="btn secondary" id="m-cancel">Cancelar</button><button class="btn" id="m-ok">Salvar</button></div>`);
+  const falha = msg => { const el = m.querySelector('#m-erro'); el.textContent = msg; el.classList.remove('hidden'); };
+  m.querySelector('#m-cancel').onclick = fecharModal;
+  m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
+    if (m.querySelector('#m-nova').value !== m.querySelector('#m-conf').value) return falha('As duas senhas novas não são iguais.');
+    try {
+      await post('/api/admin/me/senha', { atual: m.querySelector('#m-atual').value, nova: m.querySelector('#m-nova').value });
+      fecharModal(); avisar('Senha alterada. Nos outros navegadores será preciso entrar de novo.', 'Pronto');
+    } catch (err) { falha(err.message); }
+  });
+  m.querySelector('#m-atual').focus();
 }
 
 // Backup: todas as abas da planilha num .xlsx (o painel nunca recebe as senhas)
@@ -989,6 +1074,8 @@ function baixarBackup() {
       col('Banco', 16), col('Agência', 9), col('Conta', 14), col('CPF', 16), col('PIX', 26), col('Ativo', 7), col('Criado em', 18)],
       linhas: D.colaboradores.map(c => [c.id, c.nome, c.usuario, c.funcao, c.telefone, c.cidade, c.uf, c.banco, c.agencia, c.conta, c.cpf, c.pix, sim(c.ativo), quando(c.criadoEm)]) },
     { nome: 'Funções', colunas: [col('Função', 20)], linhas: D.funcoes.map(f => [f]) },
+    ...(D.administradores.length ? [{ nome: 'Administradores', colunas: [col('ID', 12), col('Nome', 26), col('Usuário', 18), col('Ativo', 7), col('Criado em', 18), col('Criado por', 18)],
+      linhas: D.administradores.map(a => [a.id, a.nome, a.usuario, sim(a.ativo), quando(a.criadoEm), a.criadoPor]) }] : []),
     { nome: 'Prestações', colunas: [col('ID', 12), col('Colaborador ID', 12), col('Colaborador', 26), col('Função', 14), col('Data inicial', 12), col('Data final', 12), col('Mês ref.', 10), ...colsCat(), col('Observação', 34), col('Criado em', 18), col('Fotos', 7)],
       linhas: D.prestacoes.map(p => [p.id, p.colaboradorId, p.nomeEpoca, p.funcao, dmy(p.dataInicial), dmy(p.dataFinal), mesTxt(p.mesRef), ...CAT.map(c => n2(p[c.chave])), n2(p.total), p.observacao, quando(p.criadoEm), p.fotos || 0]) },
     { nome: 'Despesas do app', colunas: [col('ID', 12), col('Colaborador ID', 12), col('Colaborador', 26), col('Função', 14), col('Data', 12), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Enviada em', 18), col('Avaliada em', 18), col('Avaliada por', 14), col('Foto', 7), col('Período', 12)],
@@ -1038,10 +1125,12 @@ function modalColab(c) {
   });
   m.querySelector('#m-nome').focus();
 }
-function mostrarSenha(r) {
+function mostrarSenha(r, admin = false) {
   const m = abrirModal(`<h3>Acesso de ${esc(r.nome)}</h3>
     <div class="pass-box">Usuário: <strong>${esc(r.usuario)}</strong><br>Senha inicial:<b>${esc(r.senhaTemporaria)}</b></div>
-    <span class="muted small">Passe esses dados para o colaborador. Ele pode trocar a senha no app, em Perfil. Esta senha não aparece de novo.</span>
+    <span class="muted small">${admin
+      ? 'Passe esses dados para a pessoa. Ela entra em /admin e pode trocar a senha em "Trocar senha", embaixo do nome. Esta senha não aparece de novo.'
+      : 'Passe esses dados para o colaborador. Ele pode trocar a senha no app, em Perfil. Esta senha não aparece de novo.'}</span>
     <div class="acts"><button class="btn" id="m-ok">Pronto</button></div>`);
   m.querySelector('#m-ok').onclick = fecharModal;
 }
@@ -1118,7 +1207,10 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) atua
 
 function mostrarLogin() { $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden'); }
 async function mostrarPainel(me) {
+  ME = me;
   $('who-nome').textContent = me.nome;
+  $('who-papel').textContent = me.principal ? 'Administrador principal' : 'Administrador';
+  $('b-senha').classList.toggle('hidden', !!me.principal);
   await carregar();
   $('v-login').classList.add('hidden'); $('v-painel').classList.remove('hidden');
   render();
@@ -1133,7 +1225,8 @@ $('v-login').addEventListener('submit', async e => {
   } catch (err) { $('a-erro').textContent = err.message; $('a-erro').classList.remove('hidden'); }
 });
 $('b-backup').addEventListener('click', baixarBackup);
-$('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} D = null; mostrarLogin(); });
+$('b-senha').addEventListener('click', modalMinhaSenha);
+$('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} D = null; ME = null; mostrarLogin(); });
 
 (async () => {
   try { await mostrarPainel(await api('/api/admin/me')); } catch { mostrarLogin(); }

@@ -13,6 +13,11 @@ const TABELAS = {
       ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX']],
     bool: ['ativo'],
   },
+  // Administradores do painel além do principal (que vem de ADMIN_USER/ADMIN_PASSWORD no ambiente)
+  Administradores: {
+    cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'], ['criadoPor', 'CriadoPor']],
+    bool: ['ativo'],
+  },
   Funcoes: {
     cols: [['id', 'ID'], ['nome', 'Nome'], ['criadoEm', 'CriadoEm']],
   },

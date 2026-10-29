@@ -71,6 +71,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .page-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .page-head > div:first-child { flex: 1; }
 .page-head h1 { margin: 0 0 4px; font-size: 22px; }
+.page-head h2 { margin: 0 0 4px; font-size: 18px; }
 .page-head p { margin: 0; color: var(--muted); font-size: 13px; }
 .page-head .acts { display: flex; gap: 8px; }
 .back { font-size: 12px; color: var(--primary); text-decoration: none; display: inline-block; margin-bottom: 4px; }
