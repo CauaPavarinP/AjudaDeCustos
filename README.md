@@ -58,6 +58,13 @@ Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, po
 - **Nunca** crie regras (policies) nem mova as tabelas para o schema `public`: há CPF e dados bancários.
 - Para criptografar e conferir a conexão, baixe o certificado em **Database Settings → SSL Configuration** e aponte `DATABASE_SSL_CA` para o arquivo.
 
+**Manter o banco gratuito ativo:** o Supabase pausa projetos gratuitos depois de 7 dias sem uso. A rotina `.github/workflows/manter-banco-ativo.yml` chama `https://ajudadecustos.onrender.com/health?banco=1` a cada 2 dias, e esse endereço faz uma leitura leve no banco.
+- Se o Render estiver dormindo, a chamada o acorda.
+- A rotina só passa a rodar quando estiver na `main`.
+- Para testar na hora, vá na aba **Actions** do GitHub → **Manter banco ativo** → **Run workflow**.
+- Se falhar, o GitHub manda e-mail.
+- O GitHub desliga rotinas agendadas de repositórios sem commits há 60 dias e avisa por e-mail. Para religar, vá na mesma tela e clique em **Enable workflow**.
+
 **Copiar os dados da planilha para o banco** (precisa das variáveis do Google **e** do `DATABASE_URL` no `.env`):
 
 ```bash

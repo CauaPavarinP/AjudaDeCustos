@@ -215,7 +215,20 @@ const exigeAdmin = (req, res, next) => {
 };
 
 // ---------------- público ----------------
-app.get('/health', (req, res) => res.json({ ok: true, armazenamento: store.modo, fotos: fotos ? fotos.modo : 'desligadas' }));
+// /health?banco=1 também faz uma leitura leve nos dados (tabela Config, uma linha). Chamado a cada 2 dias pelo
+// GitHub Actions (.github/workflows/manter-banco-ativo.yml): mantém ativo o banco gratuito do Supabase, que pausa
+// depois de 7 dias sem uso. Não devolve nenhum dado, só se a leitura funcionou.
+app.get('/health', wrap(async (req, res) => {
+  const base = { armazenamento: store.modo, fotos: fotos ? fotos.modo : 'desligadas' };
+  if (req.query.banco === undefined) return res.json({ ok: true, ...base });
+  try {
+    await store.list('Config');
+    res.json({ ok: true, ...base, banco: 'ok' });
+  } catch (err) {
+    console.error('[health] leitura do banco falhou:', resumoErro(err));
+    res.status(503).json({ ok: false, ...base, banco: 'falhou' });
+  }
+}));
 app.get('/api/categorias', (req, res) => res.json(CATEGORIAS));
 app.get('/api/config', (req, res) => res.json({ fotos: !!fotos }));
 

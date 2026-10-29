@@ -111,6 +111,10 @@ test('health e versão', async () => {
   const r = await cliente().get('/health');
   assert.equal(r.dados.armazenamento, BANCO_TESTE ? 'banco' : 'memoria');
   assert.ok(r.headers.get('x-versao'));
+  // ?banco=1: lê os dados de verdade (usado pelo GitHub Actions para manter o banco do Supabase ativo)
+  const b = await cliente().get('/health?banco=1');
+  assert.equal(b.status, 200);
+  assert.equal(b.dados.banco, 'ok');
 });
 
 test('login do painel: senha errada recusa, cookie adulterado não entra', async () => {
