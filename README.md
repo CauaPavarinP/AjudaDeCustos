@@ -42,7 +42,7 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 
 Crie uma planilha nova e compartilhe com o e-mail da Service Account como **Editor**. Pode ser a mesma Service Account da Fila de Atendimento. Ao iniciar, o sistema cria sozinho as abas:
 
-- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm, Telefone, Cidade, UF, Banco, Agencia, Conta, CPF, PIX (as colunas a partir de Telefone são opcionais e criadas sozinhas)
+- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm, Telefone, Cidade, UF, Banco, Agencia, Conta, CPF, PIX, DesativadoEm (as colunas a partir de Telefone são opcionais e criadas sozinhas; DesativadoEm é preenchida pelo sistema)
 - `Funcoes`: ID, Nome, CriadoEm
 - `Prestacoes`: ID, ColaboradorID, Colaborador, Funcao, DataInicial, DataFinal, MesReferencia, Combustivel, Alimentacao, Degustacao, Hotel, Transporte, Outros, Total, Observacao, CriadoEm, Fotos (referências das fotos separadas por `|`; criada sozinha)
 - `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor, Foto, PeriodoID (as colunas Foto e PeriodoID são criadas sozinhas em planilhas que já existem). PeriodoID fica vazio enquanto a despesa não foi enviada; depois guarda o ID do período (ou `liberada`, para uma despesa antiga que voltou a poder entrar num período)
@@ -77,7 +77,7 @@ Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, po
   - **Em produção (`NODE_ENV=production`) ele é obrigatório**: sem ele, o sistema não sobe, porque CPF e dados bancários passariam sem criptografia.
   - No teste local ele é opcional, e o terminal avisa que a conexão está sem criptografia.
 - **Se o banco cair ou travar:** cada ação espera no máximo 10 s para conectar e 30 s por consulta, e depois mostra erro. O servidor continua no ar e reconecta sozinho.
-- **Pagar, "Já foram pagas", "Incluir para pagar" e "Desfazer pagamento"** são gravados numa transação só: se algo falhar no meio, nada fica gravado. Na planilha, o sistema desfaz o que já tinha gravado.
+- **Fechar período, Reabrir, "Já foram pagas" e "Desfazer pagamento"** (que mexem em várias despesas de uma vez) são gravados numa transação só: se algo falhar no meio, nada fica gravado. Na planilha, o sistema desfaz o que já tinha gravado.
 - **Primeira vez:** o sistema grava em `Config` a data de início do controle de pagamentos e cria as funções iniciais (Vendedor e Promotora). Se depois todas as funções forem excluídas, elas **não** voltam sozinhas.
 
 **Atualização das telas:** a cada 5 segundos, o app e o painel perguntam ao servidor se algo mudou (uma resposta bem pequena) e só então baixam os dados de novo. Assim, uma aprovação aparece no celular em poucos segundos sem baixar a lista toda o tempo todo (o que gastaria o limite de tráfego do plano gratuito). Por segurança, as telas também baixam tudo a cada 60 segundos, para pegar o que for mudado direto no banco (ex.: pelo Table Editor do Supabase). A marca de mudanças fica na memória do servidor: com mais de um servidor ao mesmo tempo, as mudanças feitas no outro aparecem em até 60 segundos.
@@ -109,8 +109,9 @@ A planilha só é **lida**: nada nela é criado, alterado ou apagado. No fim, o 
   - A senha inicial, com 10 caracteres, aparece uma vez só.
   - Cada administrador entra em `/admin` com usuário e senha próprios e troca a senha em **"Trocar senha"**, embaixo do nome. O mínimo é 8 caracteres.
   - Eles fazem tudo no painel, menos mexer em administradores.
-  - "Aprovado por" e "pago por" registram o nome de quem fez.
-- Ficam na aba/tabela `Administradores` (ID, Nome, Usuario, Ativo, SenhaHash, CriadoEm, CriadoPor), criada sozinha. O backup do painel inclui essa lista, sem as senhas.
+  - "Aprovado por", "fechado por" e "pago por" registram o nome de quem fez.
+  - Quem for desativado sai do painel na hora, com o aviso "Seu acesso ao painel foi desativado". Se for reativado, precisa entrar de novo.
+- Ficam na aba/tabela `Administradores` (ID, Nome, Usuario, Ativo, SenhaHash, CriadoEm, CriadoPor, DesativadoEm), criada sozinha. O backup do painel inclui essa lista, sem as senhas.
 
 ## Variáveis de ambiente
 

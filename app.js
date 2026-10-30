@@ -102,6 +102,9 @@ const COOKIE = 'ajudacusto.s';
 const DURACAO_MS = 12 * 60 * 60 * 1000;
 const hmac = txt => crypto.createHmac('sha256', SEGREDO).update(txt).digest('base64url');
 const versaoSenha = hash => hmac('v:' + hash).slice(0, 16);
+// Versão da sessão de um colaborador ou administrador: muda quando a senha muda e quando a pessoa é desativada
+// (assim, reativar não traz de volta um login antigo). Quem nunca foi desativado mantém a versão de antes.
+const versaoConta = x => versaoSenha(x.senhaHash + (x.desativadoEm ? '|' + x.desativadoEm : ''));
 // Administrador principal: o login de ADMIN_USER/ADMIN_PASSWORD (variáveis do Render). Não fica na tabela, não pode
 // ser desativado pelo painel e é o único que cadastra outros administradores (tabela Administradores).
 const PRINCIPAL = 'principal';
@@ -227,12 +230,13 @@ const exigeColab = wrap(async (req, res, next) => {
   const s = req.sessao;
   if (!s.c) return erro(res, 'Faça login.', 401);
   const c = (await store.list('Colaboradores')).find(x => x.id === s.c);
-  const motivo = !c || !c.ativo ? 'Acesso desativado.' : s.cv !== versaoSenha(c.senhaHash) ? 'Sua senha foi alterada. Entre novamente.' : '';
+  const motivo = !c || !c.ativo ? 'Acesso desativado.' : s.cv !== versaoConta(c) ? 'Sua senha foi alterada. Entre novamente.' : '';
   if (motivo) { sairColab(s); gravarSessao(res, s); return erro(res, motivo, 401); }
   req.colab = c;
   next();
 });
 // req.admin = quem está logado no painel ({ id, nome, usuario, principal }); o nome vai em "aprovado por", "pago por"...
+const ADMIN_DESATIVADO = 'Seu acesso ao painel foi desativado. Fale com o administrador principal.';
 const exigeAdmin = wrap(async (req, res, next) => {
   const s = req.sessao;
   if (s.a === PRINCIPAL || s.a === 1) { // 1: sessões abertas antes desta versão (só existia o principal)
@@ -242,10 +246,11 @@ const exigeAdmin = wrap(async (req, res, next) => {
     }
   } else if (s.a) {
     const a = (await store.list('Administradores')).find(x => x.id === s.a);
-    if (a && a.ativo && s.av === versaoSenha(a.senhaHash)) {
+    if (a && a.ativo && s.av === versaoConta(a)) {
       req.admin = { id: a.id, nome: a.nome, usuario: a.usuario, principal: false };
       return next();
     }
+    if (a && !a.ativo) { sairAdmin(s); gravarSessao(res, s); return erro(res, ADMIN_DESATIVADO, 401); }
   }
   if (s.a) { sairAdmin(s); gravarSessao(res, s); }
   erro(res, 'Faça login.', 401);
@@ -301,7 +306,7 @@ app.post('/api/login', wrap(async (req, res) => {
   const c = (await store.list('Colaboradores')).find(x => x.usuario === usuario && x.ativo);
   if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave, conta);
-  Object.assign(req.sessao, { c: c.id, cv: versaoSenha(c.senhaHash), ce: Date.now() + DURACAO_MS });
+  Object.assign(req.sessao, { c: c.id, cv: versaoConta(c), ce: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
@@ -317,7 +322,7 @@ app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
   const senhaHash = hashSenha(nova);
   await store.update('Colaboradores', req.colab.id, { senhaHash });
   // Mantém este aparelho logado; outros aparelhos com a senha antiga são desconectados
-  req.sessao.cv = versaoSenha(senhaHash);
+  req.sessao.cv = versaoConta({ ...req.colab, senhaHash });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
@@ -327,7 +332,7 @@ app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
   const lista = todas.filter(d => d.colaboradorId === req.colab.id)
     .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
   // Cada despesa vai com o período em que foi enviada (datas, status e data do pagamento); null = ainda não enviada
-  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm }]));
+  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm, antesDoSistema: Regras.antesDoSistema(p) }]));
   res.json(lista.map(d => ({ ...publicoDesp(d), periodo: per.get(d.periodoId) || (antiga(d) ? { status: ANTERIOR } : null) })));
 }));
 
@@ -438,13 +443,18 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
 // Entra como o principal (variáveis do ambiente) ou como um administrador da tabela
 app.post('/api/admin/login', wrap(async (req, res) => {
   const usuario = texto(req.body.usuario, 100), senha = String(req.body.senha ?? '');
-  const chave = 'a:' + req.ip, conta = 'A:' + usuario.toLowerCase();
+  // por aparelho E usuário: erros de uma pessoa não bloqueiam os outros administradores da mesma rede
+  const chave = 'a:' + req.ip + ':' + usuario.toLowerCase(), conta = 'A:' + usuario.toLowerCase();
   if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
   let entrou = null;
   if (iguais(usuario, ADMIN_USER()) && iguais(senha, process.env.ADMIN_PASSWORD || 'admin')) entrou = { a: PRINCIPAL, av: versaoAdmin() };
   else {
-    const a = (await store.list('Administradores')).find(x => x.usuario === usuario.toLowerCase() && x.ativo);
-    if (a && confereSenha(senha, a.senhaHash)) entrou = { a: a.id, av: versaoSenha(a.senhaHash) };
+    const a = (await store.list('Administradores')).find(x => x.usuario === usuario.toLowerCase());
+    if (a && confereSenha(senha, a.senhaHash)) {
+      // senha certa de um administrador desativado: explica (só com a senha certa, para não revelar quem existe)
+      if (!a.ativo) return erro(res, ADMIN_DESATIVADO, 403);
+      entrou = { a: a.id, av: versaoConta(a) };
+    }
   }
   if (!entrou) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave, conta);
@@ -464,7 +474,7 @@ app.post('/api/admin/me/senha', exigeAdmin, wrap(async (req, res) => {
   if (nova.length < SENHA_ADMIN_MIN) return erro(res, `A nova senha precisa ter pelo menos ${SENHA_ADMIN_MIN} caracteres.`);
   const senhaHash = hashSenha(nova);
   await store.update('Administradores', a.id, { senhaHash });
-  req.sessao.av = versaoSenha(senhaHash); // mantém este navegador logado; os outros com a senha antiga saem
+  req.sessao.av = versaoConta({ ...a, senhaHash }); // mantém este navegador logado; os outros com a senha antiga saem
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
@@ -474,6 +484,8 @@ const publicoAdmin = a => ({ id: a.id, nome: a.nome, usuario: a.usuario, ativo: 
 async function validarAdmin(body, idAtual) {
   const nome = texto(body.nome, 80), usuario = texto(body.usuario, 30).toLowerCase();
   if (nome.length < 2) return { erro: 'Informe o nome.' };
+  // o nome vai em "pago por"; este texto marca os pagamentos feitos antes do sistema e não pode aparecer nele
+  if (nome.toLowerCase().includes(ANTES_DO_SISTEMA)) return { erro: 'Esse nome não pode ser usado. Escolha outro.' };
   if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
   if (usuario === ADMIN_USER().toLowerCase()) return { erro: 'Esse usuário já é o do administrador principal.' };
   const todos = await store.list('Administradores', { fresco: true });
@@ -499,6 +511,7 @@ app.post('/api/admin/administradores', exigeAdmin, exigePrincipal, wrap(async (r
 app.put('/api/admin/administradores/:id', exigeAdmin, exigePrincipal, wrap(async (req, res) => {
   const id = String(req.params.id), campos = {};
   if ('ativo' in req.body) campos.ativo = req.body.ativo === true;
+  if (campos.ativo === false) campos.desativadoEm = new Date().toISOString(); // derruba os logins abertos, mesmo depois de reativar
   let senha;
   if (req.body.novaSenha === true) { senha = senhaTemporaria(SENHA_ADMIN_MIN + 2); campos.senhaHash = hashSenha(senha); }
   const a = await comTrava('administradores', async () => {
@@ -598,6 +611,7 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
   const campos = {};
   if ('ativo' in req.body) campos.ativo = !!req.body.ativo;
+  if (campos.ativo === false) campos.desativadoEm = new Date().toISOString(); // derruba os logins abertos, mesmo depois de reativar
   let senha;
   if (req.body.novaSenha) { senha = senhaTemporaria(); campos.senhaHash = hashSenha(senha); }
   const c = await comTrava('colaboradores', async () => { // mesma trava do cadastro (o usuário pode mudar aqui)
@@ -630,8 +644,8 @@ app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => 
 }));
 
 // ---- prestações (lançadas pelo Maurício) ----
-async function validarPrestacao(body, atual) {
-  const colab = (await store.list('Colaboradores')).find(c => c.id === String(body.colaboradorId || ''));
+async function validarPrestacao(body, atual, leitura) {
+  const colab = (await store.list('Colaboradores', leitura)).find(c => c.id === String(body.colaboradorId || ''));
   if (!colab) return { erro: 'Escolha o colaborador.' };
   const mesmoColab = atual && atual.colaboradorId === colab.id;
   if (!colab.ativo && !mesmoColab) return { erro: `${colab.nome} está desativado. Reative o colaborador para lançar uma prestação nova.` };
@@ -658,19 +672,28 @@ async function validarPrestacao(body, atual) {
   return p;
 }
 
+// Valida e grava dentro da trava do colaborador (a mesma da exclusão): não sobra prestação de colaborador
+// que foi excluído no mesmo instante
 app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
-  const p = await validarPrestacao(req.body);
-  if (p.erro) return erro(res, p.erro);
-  const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
-  await comTrava(chaveFechar(nova.colaboradorId), () => store.add('Prestacoes', nova));
-  res.status(201).json(publicoPrest(nova));
+  const r = await comTrava(chaveFechar(String(req.body.colaboradorId || '')), async () => {
+    const p = await validarPrestacao(req.body, undefined, { fresco: true });
+    if (p.erro) return p;
+    const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
+    await store.add('Prestacoes', nova);
+    return nova;
+  });
+  if (r.erro) return erro(res, r.erro);
+  res.status(201).json(publicoPrest(r));
 }));
 app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
   const anterior = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
   if (!anterior) return erro(res, 'Prestação não encontrada.', 404);
-  const p = await validarPrestacao(req.body, anterior);
-  if (p.erro) return erro(res, p.erro);
-  const atual = await store.update('Prestacoes', String(req.params.id), p);
+  const atual = await comTrava(chaveFechar(String(req.body.colaboradorId || '')), async () => {
+    const p = await validarPrestacao(req.body, anterior, { fresco: true });
+    if (p.erro) return p;
+    return store.update('Prestacoes', String(req.params.id), p);
+  });
+  if (atual && atual.erro) return erro(res, atual.erro);
   if (!atual) return erro(res, 'Prestação não encontrada.', 404);
   res.json(publicoPrest(atual));
 }));

@@ -122,6 +122,13 @@ test('várias gravações juntas (planilha/memória): erro no meio desfaz o que 
     throw new Error('falha simulada');
   }), /falha simulada/);
   assert.deepEqual((await s.list('Funcoes')).map(f => [f.id, f.nome]), [['f1', 'A']]);
+  // campo que a linha ainda não tinha (ex.: periodoId de despesa nova) também é desfeito
+  await s.add('Despesas', { id: 'd1', status: 'Em análise' });
+  await assert.rejects(s.transacao(async tx => {
+    await tx.update('Despesas', 'd1', { periodoId: 'p1' });
+    throw new Error('falha simulada');
+  }), /falha simulada/);
+  assert.equal((await s.list('Despesas')).find(d => d.id === 'd1').periodoId || '', '');
 });
 test('texto com caractere invisível (NUL) é limpo, e não vira erro 500', async () => {
   const a = await adminLogado();
@@ -434,6 +441,60 @@ test('marca de mudanças: só muda quando algo é gravado; exige login', async (
   assert.notEqual(m2, m1, 'lançar despesa muda a marca');
   await a.post(`/api/admin/despesas/${d.id}/aprovar`);
   assert.notEqual((await c.get('/api/mudancas')).dados.v, m2, 'aprovar muda a marca');
+});
+
+test('prestação lançada junto com a exclusão do colaborador não fica sem colaborador', async () => {
+  const a = await adminLogado();
+  for (let i = 0; i < 15; i++) {
+    const usuario = 'corrida' + i + Date.now().toString(36);
+    const id = (await a.post('/api/admin/colaboradores', { nome: 'Corrida ' + i, usuario, funcao: 'Vendedor' })).dados.id;
+    const mes = ontem().slice(0, 7);
+    await Promise.all([
+      a.post('/api/admin/prestacoes', { colaboradorId: id, dataInicial: ontem(), dataFinal: ontem(), mesRef: mes, hotel: 10 }),
+      a.del('/api/admin/colaboradores/' + id),
+    ]);
+  }
+  const d = (await a.get('/api/admin/dados')).dados;
+  const ids = new Set(d.colaboradores.map(c => c.id));
+  assert.equal(d.prestacoes.filter(p => !ids.has(p.colaboradorId)).length, 0);
+});
+
+test('reativar alguém não traz de volta o login antigo; admin desativado recebe o motivo', async () => {
+  const a = await adminLogado();
+  const { c, id, usuario } = await novoColaborador(a);
+  const col = (await a.get('/api/admin/dados')).dados.colaboradores.find(x => x.id === id);
+  await a.put('/api/admin/colaboradores/' + id, { ativo: false });
+  await a.put('/api/admin/colaboradores/' + id, { ativo: true });
+  assert.equal((await c.get('/api/me')).status, 401, 'cookie de antes da desativação não vale mais');
+  assert.equal(col.usuario, usuario);
+  // administrador
+  const novo = (await a.post('/api/admin/administradores', { nome: 'Desativa Teste', usuario: 'desat' + Date.now().toString(36) })).dados;
+  const b = cliente();
+  assert.equal((await b.post('/api/admin/login', { usuario: novo.usuario, senha: novo.senhaTemporaria })).status, 200);
+  await a.put('/api/admin/administradores/' + novo.id, { ativo: false });
+  const r = await b.get('/api/admin/dados');
+  assert.equal(r.status, 401);
+  assert.match(r.dados.erro, /desativado/);
+  // tentar entrar de novo com a senha certa explica; com a senha errada, não revela nada
+  const b2 = cliente();
+  const certa = await b2.post('/api/admin/login', { usuario: novo.usuario, senha: novo.senhaTemporaria });
+  assert.equal(certa.status, 403); assert.match(certa.dados.erro, /desativado/);
+  assert.match((await b2.post('/api/admin/login', { usuario: novo.usuario, senha: 'errada123' })).dados.erro, /incorretos/);
+  await a.put('/api/admin/administradores/' + novo.id, { ativo: true });
+  assert.equal((await b.get('/api/admin/dados')).status, 401, 'reativado precisa entrar de novo');
+});
+
+test('login do painel: erros de um usuário não bloqueiam os outros administradores', async () => {
+  const c = cliente();
+  for (let i = 0; i < 6; i++) await c.post('/api/admin/login', { usuario: 'fulano.inexistente', senha: 'x' });
+  assert.equal((await c.post('/api/admin/login', { usuario: 'fulano.inexistente', senha: 'x' })).status, 429);
+  assert.equal((await c.post('/api/admin/login', { usuario: 'admin', senha: 'admin' })).status, 200);
+});
+
+test('nome de administrador não pode imitar a marca de "pago antes do sistema"', async () => {
+  const a = await adminLogado();
+  const r = await a.post('/api/admin/administradores', { nome: 'Ana (pago antes do sistema)', usuario: 'imita' + Date.now().toString(36) });
+  assert.equal(r.status, 400);
 });
 
 test('colaborador desativado perde o acesso na hora', async () => {

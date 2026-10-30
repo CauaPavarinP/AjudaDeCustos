@@ -10,12 +10,12 @@ const TABELAS = {
   Colaboradores: {
     cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'],
       ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF'],
-      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX']],
+      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX'], ['desativadoEm', 'DesativadoEm']],
     bool: ['ativo'],
   },
   // Administradores do painel além do principal (que vem de ADMIN_USER/ADMIN_PASSWORD no ambiente)
   Administradores: {
-    cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'], ['criadoPor', 'CriadoPor']],
+    cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'], ['criadoPor', 'CriadoPor'], ['desativadoEm', 'DesativadoEm']],
     bool: ['ativo'],
   },
   Funcoes: {
@@ -176,6 +176,11 @@ function criarStoreSheets({ spreadsheetId, email, privateKey, somenteLeitura = f
       if (fresco) limpar(t);
       return (await linhas(t)).map(r => deLinha(t, r.toObject())).filter(o => o.id);
     },
+    // Linhas preenchidas mas sem ID (o sistema ignora). Usado pela migração para não perder nada sem avisar.
+    async semId(t) {
+      const vazio = v => v === '' || v === false || v === 0;
+      return (await linhas(t)).map(r => deLinha(t, r.toObject())).filter(o => !o.id && !Object.values(o).every(vazio)).length;
+    },
     add: (t, obj) => naFila(t, async () => {
       // raw: true evita que textos digitados virem fórmulas na planilha
       await doc.sheetsByTitle[t].addRow(paraLinha(t, obj), { raw: true });
@@ -220,7 +225,8 @@ function comDesfazer(base) {
         let antes = null;
         const r = await base.update(t, id, campos, a => { antes = a; return !se || se(a); });
         if (r && antes) {
-          const volta = Object.fromEntries(Object.keys(campos).filter(k => k in antes).map(k => [k, antes[k]]));
+          // campo que ainda não existia na linha volta vazio (ex.: periodoId de uma despesa nova, na memória)
+          const volta = Object.fromEntries(Object.keys(campos).map(k => [k, k in antes ? antes[k] : '']));
           desfazer.push(() => base.update(t, id, volta));
         }
         return r;

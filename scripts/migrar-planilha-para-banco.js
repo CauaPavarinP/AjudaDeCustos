@@ -14,6 +14,10 @@ async function main() {
   const faltam = ['SPREADSHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'DATABASE_URL'].filter(v => !env[v]);
   if (faltam.length) throw new Error('Faltam no .env: ' + faltam.join(', '));
   const apagarAntes = process.argv.includes('--apagar-antes');
+  if (apagarAntes) {
+    console.log('Atenção: com --apagar-antes, o que estiver no banco é apagado e copiado de novo da planilha.');
+    console.log('Pare o sistema que usa este banco antes (no Render: Suspend), senão o que ele gravar durante a cópia se perde.\n');
+  }
 
   const planilha = criarStoreSheets({
     spreadsheetId: env.SPREADSHEET_ID, email: env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -33,6 +37,9 @@ async function main() {
       const vistos = new Set(), repetidos = new Set();
       for (const l of dados[t]) (vistos.has(l.id) ? repetidos : vistos).add(l.id);
       if (repetidos.size) throw new Error(`a aba ${t} tem ID repetido: ${[...repetidos].join(', ')}. Corrija na planilha (cada linha precisa de um ID único) e rode de novo.`);
+      // linha preenchida sem ID seria ignorada: para antes, em vez de copiar faltando dados
+      const semId = await planilha.semId(t);
+      if (semId) throw new Error(`a aba ${t} tem ${semId} linha${semId > 1 ? 's' : ''} preenchida${semId > 1 ? 's' : ''} sem ID. Confira na planilha (não apague o ID das linhas) e rode de novo.`);
     }
 
     // Copia tudo numa transação só: se qualquer linha der erro, nada fica gravado (o banco não fica pela metade)

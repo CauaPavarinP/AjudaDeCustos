@@ -287,7 +287,7 @@ function cardPeriodo() {
     ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento <span class="s">(todos os meses)</span></div>
       <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${faixa(datas[0], datas[datas.length - 1])}</div>
       <button class="btn block" id="i-fechar">Fechar período e enviar</button>` : ''}
-    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `<b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b> aprovado${aprovEnv.length === 1 ? '' : 's'}` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
+    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `aprovado: <b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b>` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
   </div>`;
 }
 let fechando = false; // trava contra toque duplo
@@ -324,10 +324,11 @@ function telaDetalhe(d) {
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
   const linha = d.status === STATUS.aprovada ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
-    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
+    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com quem avaliou se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   const linhaPer = !d.periodo ? (d.status !== STATUS.recusada ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
     : d.periodo.status === ANTERIOR ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
+    : paga(d) && d.periodo.antesDoSistema ? '<div class="okline blue">💰 Paga antes do controle de pagamentos pelo app.</div>'
     : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
     : `<div class="okline gray">Enviada no período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}${d.status === STATUS.aprovada ? ' · aguardando pagamento' : ''}</div>`;
   // depois de avaliada pelo Maurício ou enviada num período, não muda mais
