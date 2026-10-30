@@ -196,6 +196,7 @@ td.obs-col { min-width: 140px; max-width: 280px; }
 .m-head { display: flex; align-items: flex-start; gap: 10px; }
 .m-head h2 { margin: 0; font-size: 20px; }
 .m-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.m-head .grow { min-width: 0; overflow-wrap: anywhere; } /* nome comprido não empurra o seletor de mês para fora */
 .m-head select { width: auto; height: 32px; font-size: 12px; padding: 0 28px 0 10px; }
 .m-title { display: flex; align-items: center; gap: 10px; }
 .m-title h2 { margin: 0; font-size: 18px; }
