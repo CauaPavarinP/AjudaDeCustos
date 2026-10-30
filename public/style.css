@@ -280,3 +280,9 @@ td.cel-click.sel, td.cel-click:active { background: var(--primary-soft); color: 
 .thumb .x:hover { background: var(--red); }
 .thumb-nova { position: absolute; left: 4px; bottom: 4px; background: var(--amber-soft); color: var(--amber); font-size: 10px; font-weight: 600; border-radius: 4px; padding: 1px 5px; }
 @media (max-width: 760px) { .nota-grid { grid-template-columns: 1fr; } .nota-img { height: 50vh; } }
+
+/* Celular: campo com letra menor que 16px faz o iPhone dar zoom ao tocar e não voltar sozinho */
+@media (pointer: coarse) {
+  .input, input, select, textarea { font-size: 16px; }
+  .m-head select { height: 36px; font-size: 16px; }
+}
