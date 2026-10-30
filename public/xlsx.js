@@ -3,7 +3,7 @@
 //
 // Uso: baixarXlsx('nome-do-arquivo', [{ nome: 'Aba', colunas: [{ titulo, largura, moeda }], linhas: [[...]], totalNoFim: true }])
 // - moeda: true formata a coluna como número com 2 casas (os valores devem ser números).
-// - totalNoFim: true deixa a última linha em negrito.
+// - totalNoFim: true deixa a última linha em negrito; um número (ex.: 2) deixa as últimas N linhas.
 (function () {
   const enc = new TextEncoder();
   const CRC = (() => {
@@ -68,7 +68,7 @@
     };
     const cab = `<row r="1">${colunas.map((c, j) => cel(c.titulo, letra(j) + 1, 1)).join('')}</row>`;
     const corpo = linhas.map((l, i) => {
-      const total = totalNoFim && i === linhas.length - 1;
+      const total = i >= linhas.length - (totalNoFim === true ? 1 : Number(totalNoFim) || 0);
       return `<row r="${i + 2}">${colunas.map((c, j) => cel(l[j], letra(j) + (i + 2), total ? (c.moeda ? 4 : 3) : (c.moeda ? 2 : 0))).join('')}</row>`;
     }).join('');
     const larguras = colunas.map((c, j) => `<col min="${j + 1}" max="${j + 1}" width="${c.largura || 14}" customWidth="1"/>`).join('');
