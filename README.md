@@ -80,6 +80,8 @@ Em vez da planilha, o sistema pode guardar os dados num banco **PostgreSQL**, po
 - **Pagar, "Já foram pagas", "Incluir para pagar" e "Desfazer pagamento"** são gravados numa transação só: se algo falhar no meio, nada fica gravado. Na planilha, o sistema desfaz o que já tinha gravado.
 - **Primeira vez:** o sistema grava em `Config` a data de início do controle de pagamentos e cria as funções iniciais (Vendedor e Promotora). Se depois todas as funções forem excluídas, elas **não** voltam sozinhas.
 
+**Atualização das telas:** a cada 5 segundos, o app e o painel perguntam ao servidor se algo mudou (uma resposta bem pequena) e só então baixam os dados de novo. Assim, uma aprovação aparece no celular em poucos segundos sem baixar a lista toda o tempo todo (o que gastaria o limite de tráfego do plano gratuito). Por segurança, as telas também baixam tudo a cada 60 segundos, para pegar o que for mudado direto no banco (ex.: pelo Table Editor do Supabase). A marca de mudanças fica na memória do servidor: com mais de um servidor ao mesmo tempo, as mudanças feitas no outro aparecem em até 60 segundos.
+
 **Manter o banco gratuito ativo:** o Supabase pausa projetos gratuitos depois de 7 dias sem uso. A rotina `.github/workflows/manter-banco-ativo.yml` chama `https://ajudadecustos.onrender.com/health?banco=1` a cada 2 dias, e esse endereço faz uma leitura leve no banco.
 - Se o Render estiver dormindo, a chamada o acorda.
 - A rotina só passa a rodar quando estiver na `main`.

@@ -1210,7 +1210,9 @@ window.addEventListener('hashchange', render);
 // aparecerem sem precisar apertar F5. A tela só é redesenhada quando isso não atrapalha:
 // fora de "Nova prestação", sem janela aberta e sem uma lista de opções aberta.
 // Se o cursor estiver num campo de texto (ex.: Buscar), ele volta para o mesmo lugar depois.
-const ATUALIZA_MS = 30000;
+// A cada 5 s pergunta ao servidor se algo mudou (resposta minúscula) e só então baixa os dados de novo;
+// por segurança, baixa tudo a cada 60 s (pega mudanças feitas fora do sistema, ex.: direto no banco).
+const VERIFICA_MS = 5000, ATUALIZA_MS = 60000;
 let telaDesatualizada = false, atualizando = false;
 function podeRedesenhar() {
   const ativo = document.activeElement;
@@ -1227,22 +1229,39 @@ function redesenharMantendoFoco() {
   const el = campo && $(campo.id);
   if (el) { el.focus(); try { el.setSelectionRange(campo.ini, campo.fim); } catch { /* campo sem seleção */ } }
 }
+// Devolve true quando os dados foram baixados
 async function atualizarSozinho() {
-  if (!D || atualizando || document.hidden) return;
+  if (!D || atualizando || document.hidden) return false;
   atualizando = true;
   try {
     const antes = JSON.stringify(D);
     await carregar();
     const ativo = document.activeElement;
-    if (versaoNova && podeRedesenhar() && !(ativo && /^(INPUT|TEXTAREA)$/.test(ativo.tagName))) return location.reload();
+    if (versaoNova && podeRedesenhar() && !(ativo && /^(INPUT|TEXTAREA)$/.test(ativo.tagName))) { location.reload(); return true; }
     if (JSON.stringify(D) !== antes) telaDesatualizada = true;
-    if (telaDesatualizada && podeRedesenhar()) {
-      telaDesatualizada = false;
-      redesenharMantendoFoco();
-    }
-  } catch { /* sem conexão ou sessão expirada: tenta de novo na próxima vez */ }
+    redesenharSePuder();
+    return true;
+  } catch { return false; /* sem conexão ou sessão expirada: tenta de novo na próxima vez */ }
   finally { atualizando = false; }
 }
+// Dados novos que chegaram com uma janela aberta: a tela é redesenhada assim que ela fechar
+function redesenharSePuder() {
+  if (telaDesatualizada && podeRedesenhar()) {
+    telaDesatualizada = false;
+    redesenharMantendoFoco();
+  }
+}
+// Marca de mudanças do servidor: só é guardada depois que os dados foram baixados
+let marcaDados = '';
+async function verificarMudancas() {
+  if (!D || document.hidden) return;
+  redesenharSePuder();
+  try {
+    const { v } = await api('/api/admin/mudancas');
+    if (v !== marcaDados && await atualizarSozinho()) marcaDados = v;
+  } catch { /* sem conexão ou sessão expirada: tenta de novo daqui a 5 s */ }
+}
+setInterval(verificarMudancas, VERIFICA_MS);
 setInterval(atualizarSozinho, ATUALIZA_MS);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 

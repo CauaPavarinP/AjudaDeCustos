@@ -426,18 +426,19 @@ function telaPerfil() {
 }
 
 // ---------- atualização automática ----------
-// Em "Minhas despesas" e no detalhe, busca as despesas de novo a cada 30 s (só com o app visível)
-// e ao voltar para o app, para o status Aprovada/Recusada aparecer sem recarregar a página.
-// Não redesenha enquanto o filtro de mês está aberto.
+// Em "Minhas despesas" e no detalhe, a cada 5 s pergunta ao servidor se algo mudou (resposta minúscula) e só
+// então busca as despesas de novo; também ao voltar para o app e, por segurança, a cada 60 s. Assim o status
+// Aprovada/Recusada aparece em poucos segundos sem baixar a lista toda o tempo todo.
+// Não redesenha enquanto o filtro de mês está aberto. Devolve true quando buscou a lista.
 let atualizando = false;
 async function atualizarSozinho() {
-  if (!me || atualizando || document.hidden || dialogoAberto() || !['inicio', 'detalhe'].includes(telaAtual)) return;
-  if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+  if (!me || atualizando || document.hidden || dialogoAberto() || !['inicio', 'detalhe'].includes(telaAtual)) return false;
+  if (document.activeElement && document.activeElement.tagName === 'SELECT') return false;
   atualizando = true;
   try {
     const novas = await api('/api/despesas');
-    if (versaoNova) return location.reload();
-    if (JSON.stringify(novas) === JSON.stringify(despesas) && !semConexaoNaTela) return;
+    if (versaoNova) { location.reload(); return true; }
+    if (JSON.stringify(novas) === JSON.stringify(despesas) && !semConexaoNaTela) return true;
     const y = window.scrollY;
     if (telaAtual === 'inicio') await telaInicio(novas);
     else if (telaAtual === 'detalhe') {
@@ -446,10 +447,23 @@ async function atualizarSozinho() {
       if (d) telaDetalhe(d); else await telaInicio(novas);
     }
     window.scrollTo(0, y);
-  } catch { /* sem conexão: tenta de novo na próxima vez */ }
+    return true;
+  } catch { return false; /* sem conexão: tenta de novo na próxima vez */ }
   finally { atualizando = false; }
 }
-setInterval(atualizarSozinho, 30000);
+// Marca de mudanças do servidor: só é guardada depois que a lista foi buscada (se a tela não pôde atualizar
+// agora, tenta de novo na próxima pergunta)
+let marcaDados = '';
+async function verificarMudancas() {
+  if (!me || document.hidden || !['inicio', 'detalhe'].includes(telaAtual)) return;
+  try {
+    const { v } = await api('/api/mudancas');
+    // com o aviso de "sem conexão" na tela, atualiza mesmo sem mudança (para o aviso sumir)
+    if ((v !== marcaDados || semConexaoNaTela) && await atualizarSozinho()) marcaDados = v;
+  } catch { /* sem conexão: tenta de novo daqui a 5 s */ }
+}
+setInterval(verificarMudancas, 5000);
+setInterval(atualizarSozinho, 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 
 // ---------- início ----------

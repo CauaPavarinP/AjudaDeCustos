@@ -420,6 +420,22 @@ test('travas de exclusão: colaborador com histórico e função em uso', async 
   assert.equal((await a.del('/api/admin/colaboradores/' + livre.id)).status, 200);
 });
 
+test('marca de mudanças: só muda quando algo é gravado; exige login', async () => {
+  assert.equal((await cliente().get('/api/mudancas')).status, 401);
+  assert.equal((await cliente().get('/api/admin/mudancas')).status, 401);
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const m1 = (await c.get('/api/mudancas')).dados.v, m1a = (await a.get('/api/admin/mudancas')).dados.v;
+  assert.ok(m1 && m1 === m1a, 'app e painel recebem a mesma marca');
+  await c.get('/api/despesas'); // só leitura: não muda
+  assert.equal((await c.get('/api/mudancas')).dados.v, m1);
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10 })).dados;
+  const m2 = (await a.get('/api/admin/mudancas')).dados.v;
+  assert.notEqual(m2, m1, 'lançar despesa muda a marca');
+  await a.post(`/api/admin/despesas/${d.id}/aprovar`);
+  assert.notEqual((await c.get('/api/mudancas')).dados.v, m2, 'aprovar muda a marca');
+});
+
 test('colaborador desativado perde o acesso na hora', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);

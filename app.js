@@ -60,6 +60,19 @@ let store;
 try { store = criarStore(process.env); }
 catch (err) { console.error('Configuração inválida:', err.message); process.exit(1); }
 const fotos = criarFotos(process.env); // null quando o envio de fotos está desligado
+
+// Marca de mudanças: muda a cada gravação feita por este servidor. As telas perguntam a cada 5 s
+// (/api/mudancas, resposta minúscula) e só baixam os dados de novo quando a marca mudou.
+// O código de partida muda a cada reinício, então uma tela aberta antes de um reinício atualiza também.
+const PARTIDA = crypto.randomBytes(4).toString('hex');
+let mudancas = 0;
+const marcaMudancas = () => `${PARTIDA}.${mudancas}`;
+for (const m of ['add', 'update', 'remove']) {
+  const original = store[m].bind(store);
+  store[m] = async (...args) => { const r = await original(...args); mudancas++; return r; };
+}
+const transacaoOriginal = store.transacao.bind(store);
+store.transacao = async (...args) => { try { return await transacaoOriginal(...args); } finally { mudancas++; } };
 const app = express();
 app.set('trust proxy', 1); // o Render fica atrás de proxy (necessário para cookie "secure")
 app.disable('x-powered-by');
@@ -295,6 +308,7 @@ app.post('/api/login', wrap(async (req, res) => {
 app.post('/api/logout', (req, res) => { sairColab(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
 
 app.get('/api/me', exigeColab, (req, res) => res.json(publicoColab(req.colab)));
+app.get('/api/mudancas', exigeColab, (req, res) => res.json({ v: marcaMudancas() }));
 
 app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
   const nova = String(req.body.nova ?? '');
@@ -439,6 +453,7 @@ app.post('/api/admin/login', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 app.post('/api/admin/logout', (req, res) => { sairAdmin(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
+app.get('/api/admin/mudancas', exigeAdmin, (req, res) => res.json({ v: marcaMudancas() }));
 app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: req.admin.nome, usuario: req.admin.usuario, principal: req.admin.principal }));
 // Administrador da tabela troca a própria senha (o principal troca no Render, em ADMIN_PASSWORD)
 app.post('/api/admin/me/senha', exigeAdmin, wrap(async (req, res) => {
