@@ -16,7 +16,8 @@ function lerDataUrl(dataUrl) {
   const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return { erro: 'Formato de foto inválido.' };
   const buf = Buffer.from(m[1], 'base64');
-  if (buf.length < 100 || buf[0] !== 0xff || buf[1] !== 0xd8) return { erro: 'Formato de foto inválido.' };
+  // JPEG começa com FF D8 e termina com FF D9 (a foto reduzida no celular/painel sempre termina assim)
+  if (buf.length < 100 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[buf.length - 2] !== 0xff || buf[buf.length - 1] !== 0xd9) return { erro: 'Formato de foto inválido.' };
   if (buf.length > TAMANHO_MAXIMO) return { erro: 'Foto muito grande.' };
   return { buf };
 }

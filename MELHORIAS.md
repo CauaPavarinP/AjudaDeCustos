@@ -14,7 +14,11 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 
 ## Segurança e dados
 
-- [ ] Login: o tempo de resposta não deve revelar se o usuário existe (#7).
+- [x] Login: o tempo de resposta não deve revelar se o usuário existe (#7).
+- [x] Auditoria de segurança de 05/11/2026: Sair invalida o login, limite de envios, limite na troca de senha, cabeçalhos CSP/HSTS, foto conferida no início e no fim, travas entre Pagar/Desfazer e Fechar período, nova tentativa quando o Google limita as gravações.
+- [ ] Bloqueio de conta: hoje 20 senhas erradas de qualquer lugar travam a conta por 10 minutos (alguém mal-intencionado poderia travar a conta de propósito). Avaliar espera progressiva no lugar do bloqueio.
+- [ ] `/health` mostra se o sistema usa planilha e Cloudinary (útil para conferir o deploy, mas é uma informação pública). Avaliar deixar só `ok`.
+- [ ] Prestação aceita datas até o fim do ano seguinte; despesa não aceita data futura. Confirmar com o Maurício se prestação pode ter data futura.
 - [x] API só aceita valor como número: hoje `"0.500"` vira 500 (#11).
 - [x] Validar a data inteira antes de cortar: hoje `2026-10-20xyz` é aceita (#12).
 - [x] Editar colaborador pela API sem os dados bancários não deve apagá-los (#13).
@@ -54,6 +58,8 @@ Marque com `[x]` o que for feito. Os números entre parênteses (#7, #8…) são
 - [x] README: abas Periodos e Config e colunas novas (#33).
 
 ## Futuro (quando o sistema crescer)
+
+- [ ] Desempenho com milhares de despesas: o painel baixa tudo a cada atualização (~2 MB com 6.000 despesas) e a tela Lançamentos fica lenta. Fazer: compressão das respostas, buscar só o que mudou ou filtrar por ano, e gravar em lote na planilha (fechar um período com centenas de notas grava uma por uma).
 
 - [ ] **Mudar para banco de dados (PostgreSQL).** Não é necessário hoje (10 colaboradores e 2 admins). Fazer quando acontecer algo destes:
   - precisar de mais de um servidor no Render, porque as travas atuais só funcionam com um;

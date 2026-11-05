@@ -55,6 +55,10 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
     console.warn(`[config] ${v} não definida (aceito só em desenvolvimento).`);
   }
 }
+if (PROD) {
+  if (process.env.SESSION_SECRET.length < 32) console.warn('[segurança] SESSION_SECRET curto: use um texto aleatório com 32 caracteres ou mais (no Render: Generate).');
+  if (process.env.ADMIN_PASSWORD.length < 10 || process.env.ADMIN_PASSWORD === 'admin') console.warn('[segurança] ADMIN_PASSWORD fraca: use 10 caracteres ou mais, misturando letras e números.');
+}
 
 const store = criarStore(process.env);
 const fotos = criarFotos(process.env); // null quando o envio de fotos está desligado
@@ -69,6 +73,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
+  // Só roda script e carrega imagem do próprio sistema: uma segunda barreira se um dia escapar um texto sem tratar
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+    + "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000'); // navegador só usa HTTPS
   next();
 });
 // Corpo das requisições: 30 KB, exceto nas rotas que recebem a foto da nota (já comprimida no celular)
@@ -87,7 +95,13 @@ const COOKIE = 'ajudacusto.s';
 const DURACAO_MS = 12 * 60 * 60 * 1000;
 const hmac = txt => crypto.createHmac('sha256', SEGREDO).update(txt).digest('base64url');
 const versaoSenha = hash => hmac('v:' + hash).slice(0, 16);
-const versaoAdmin = () => versaoSenha('admin:' + (process.env.ADMIN_USER || 'admin') + '\n' + (process.env.ADMIN_PASSWORD || 'admin'));
+// "Época" da sessão: muda quando a pessoa clica em Sair ou é desativada. Entra na versão do login, então os
+// cookies antigos (um celular perdido, um computador compartilhado) deixam de valer na hora, em todos os aparelhos.
+// Quem nunca saiu nem foi desativado mantém a versão de antes (ninguém é deslogado por esta mudança).
+const versaoConta = c => versaoSenha(c.senhaHash + (c.sessaoEpoca ? '|' + c.sessaoEpoca : ''));
+let EPOCA_ADMIN = ''; // a do painel fica na aba Config (sessaoAdmin)
+const versaoAdmin = () => versaoSenha('admin:' + (process.env.ADMIN_USER || 'admin') + '\n' + (process.env.ADMIN_PASSWORD || 'admin')
+  + (EPOCA_ADMIN ? '\n' + EPOCA_ADMIN : ''));
 
 function lerSessao(req) {
   const bruto = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='));
@@ -128,7 +142,13 @@ function problemaData(s, nome) {
 }
 const valorMaximoTxt = () => VALOR_MAXIMO.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const mesValido = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(s || '');
-const texto = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+// Texto digitado: tira caracteres invisíveis/proibidos (quebram o Excel), junta acentos "separados" (no PDF
+// viravam "?") e corta sem partir um emoji ao meio
+// eslint-disable-next-line no-control-regex
+const PROIBIDOS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+const texto = (v, max) => Array.from(String(v ?? '').replace(PROIBIDOS, '').normalize('NFC').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
+// Para conferir se um texto obrigatório tem conteúdo de verdade (sem contar caracteres invisíveis)
+const temConteudo = s => s.replace(/[\p{Cf}\u115f\u1160\u3164\u2800\s]/gu, '') !== '';
 const r2 = n => Math.round(n * 100) / 100;
 // Valor vindo da API: só número (o app e o painel mandam número). Texto como "0.500" não vira 500.
 const valor = v => (typeof v === 'number' && Number.isFinite(v) ? r2(v) : NaN);
@@ -149,6 +169,8 @@ function confereSenha(senha, guardado) {
   const x = crypto.scryptSync(String(senha), salt, 32), y = Buffer.from(h, 'hex');
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
+// Usuário que não existe também passa pela conferência de senha (o tempo de resposta não revela quem existe)
+const HASH_FALSO = hashSenha(crypto.randomBytes(16).toString('hex'));
 function senhaTemporaria() {
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
   return Array.from({ length: 6 }, () => abc[crypto.randomInt(abc.length)]).join('');
@@ -192,9 +214,21 @@ function falhou(k, limite = LIMITE) {
   tentativas.set(k, t);
 }
 const sucesso = (...ks) => ks.forEach(k => tentativas.delete(k));
+// Limite de envios por pessoa (despesas e fotos): impede que alguém (ou um login roubado) mande centenas de
+// lançamentos em segundos e gaste a cota do Cloudinary e da planilha. Uso normal fica bem abaixo disso.
+const envios = new Map();
+function passouDoLimite(chave, maximo, janelaMs) {
+  const agora = Date.now(), lista = (envios.get(chave) || []).filter(t => t > agora - janelaMs);
+  if (lista.length >= maximo) { envios.set(chave, lista); return true; }
+  lista.push(agora); envios.set(chave, lista);
+  return false;
+}
+const limiteEnvios = id => passouDoLimite('m:' + id, 20, 60 * 1000) || passouDoLimite('d:' + id, 150, 24 * 60 * 60 * 1000);
+const MSG_LIMITE = 'Muitos envios em pouco tempo. Aguarde um minuto e tente de novo.';
 setInterval(() => {
   const agora = Date.now();
   for (const [k, t] of tentativas) if (!t.ate || t.ate < agora) tentativas.delete(k);
+  for (const [k, l] of envios) if (!l.some(t => t > agora - 24 * 60 * 60 * 1000)) envios.delete(k);
 }, 60 * 60 * 1000).unref();
 
 const sairColab = s => { delete s.c; delete s.cv; delete s.ce; };
@@ -205,7 +239,7 @@ const exigeColab = wrap(async (req, res, next) => {
   const s = req.sessao;
   if (!s.c) return erro(res, 'Faça login.', 401);
   const c = (await store.list('Colaboradores')).find(x => x.id === s.c);
-  const motivo = !c || !c.ativo ? 'Acesso desativado.' : s.cv !== versaoSenha(c.senhaHash) ? 'Sua senha foi alterada. Entre novamente.' : '';
+  const motivo = !c || !c.ativo ? 'Acesso desativado.' : s.cv !== versaoConta(c) ? 'Sua senha foi alterada. Entre novamente.' : '';
   if (motivo) { sairColab(s); gravarSessao(res, s); return erro(res, motivo, 401); }
   req.colab = c;
   next();
@@ -246,24 +280,35 @@ app.post('/api/login', wrap(async (req, res) => {
   const chave = 'c:' + req.ip + ':' + usuario, conta = 'C:' + usuario;
   if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
   const c = (await store.list('Colaboradores')).find(x => x.usuario === usuario && x.ativo);
-  if (!c || !confereSenha(req.body.senha, c.senhaHash)) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  if (!confereSenha(req.body.senha, c ? c.senhaHash : HASH_FALSO) || !c) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave, conta);
-  Object.assign(req.sessao, { c: c.id, cv: versaoSenha(c.senhaHash), ce: Date.now() + DURACAO_MS });
+  Object.assign(req.sessao, { c: c.id, cv: versaoConta(c), ce: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
-app.post('/api/logout', (req, res) => { sairColab(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
+// Sair: além de apagar o cookie deste aparelho, invalida o login (um cookie copiado não serve mais)
+app.post('/api/logout', wrap(async (req, res) => {
+  const s = req.sessao;
+  if (s.c) {
+    const c = (await store.list('Colaboradores', { fresco: true })).find(x => x.id === s.c);
+    if (c && s.cv === versaoConta(c)) await store.update('Colaboradores', c.id, { sessaoEpoca: novoId() }).catch(e => console.error('[sair]', resumoErro(e)));
+  }
+  sairColab(s); gravarSessao(res, s); res.json({ ok: true });
+}));
 
 app.get('/api/me', exigeColab, (req, res) => res.json(publicoColab(req.colab)));
 
 app.post('/api/me/senha', exigeColab, wrap(async (req, res) => {
   const nova = String(req.body.nova ?? '');
-  if (!confereSenha(req.body.atual, req.colab.senhaHash)) return erro(res, 'A senha atual não confere.');
+  const chave = 's:' + req.colab.id; // mesmo bloqueio do login: 5 erros, 10 minutos
+  if (bloqueado(chave)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
+  if (!confereSenha(req.body.atual, req.colab.senhaHash)) { falhou(chave); return erro(res, 'A senha atual não confere.'); }
+  sucesso(chave);
   if (nova.length < 6) return erro(res, 'A nova senha precisa ter pelo menos 6 caracteres.');
   const senhaHash = hashSenha(nova);
   await store.update('Colaboradores', req.colab.id, { senhaHash });
   // Mantém este aparelho logado; outros aparelhos com a senha antiga são desconectados
-  req.sessao.cv = versaoSenha(senhaHash);
+  req.sessao.cv = versaoConta({ ...req.colab, senhaHash });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 }));
@@ -273,7 +318,7 @@ app.get('/api/despesas', exigeColab, wrap(async (req, res) => {
   const lista = todas.filter(d => d.colaboradorId === req.colab.id)
     .sort((a, b) => (b.data + b.criadoEm).localeCompare(a.data + a.criadoEm));
   // Cada despesa vai com o período em que foi enviada (datas, status e data do pagamento); null = ainda não enviada
-  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm }]));
+  const per = new Map(periodos.map(p => [p.id, { dataInicial: p.dataInicial, dataFinal: p.dataFinal, status: p.status, pagoEm: p.pagoEm, antesDoSistema: Regras.antesDoSistema(p) }]));
   res.json(lista.map(d => ({ ...publicoDesp(d), periodo: per.get(d.periodoId) || (antiga(d) ? { status: ANTERIOR } : null) })));
 }));
 
@@ -325,7 +370,8 @@ app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const problema = problemaData(data, 'A data');
   if (problema) return erro(res, problema);
   if (data > hojeSP()) return erro(res, 'A data não pode ser no futuro.');
-  if (categoria === 'Outros' && !observacao) return erro(res, 'Para "Outros", escreva uma observação.');
+  if (categoria === 'Outros' && !temConteudo(observacao)) return erro(res, 'Para "Outros", escreva uma observação.');
+  if (limiteEnvios(req.colab.id)) return erro(res, MSG_LIMITE, 429);
   const d = {
     id: novoId(), colaboradorId: req.colab.id, colaborador: req.colab.nome, funcao: req.colab.funcao,
     data, categoria, valor: v, observacao, status: STATUS.analise,
@@ -358,6 +404,7 @@ app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
   if (d.status !== STATUS.analise) return erro(res, 'Só dá para mudar a foto enquanto a despesa está em análise.');
   if (!naoEnviada(d)) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser alterada.');
+  if (limiteEnvios(req.colab.id)) return erro(res, MSG_LIMITE, 429);
   const f = await guardarFoto(d.id, req.body.foto);
   if (f.erro) return erro(res, f.erro);
   // Condição: só troca se continua em análise e fora de período (pode ter sido aprovada/enviada durante o envio da foto)
@@ -395,7 +442,15 @@ app.post('/api/admin/login', (req, res) => {
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 });
-app.post('/api/admin/logout', (req, res) => { sairAdmin(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
+// Sair do painel invalida o login do painel em todos os aparelhos (um cookie copiado não serve mais)
+app.post('/api/admin/logout', wrap(async (req, res) => {
+  const s = req.sessao;
+  if (s.a && s.av === versaoAdmin()) {
+    EPOCA_ADMIN = novoId();
+    await gravarConfig('sessaoAdmin', EPOCA_ADMIN).catch(e => console.error('[sair]', resumoErro(e)));
+  }
+  sairAdmin(s); gravarSessao(res, s); res.json({ ok: true });
+}));
 app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }));
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
@@ -415,6 +470,7 @@ app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
 app.post('/api/admin/funcoes', exigeAdmin, wrap(async (req, res) => {
   const nome = texto(req.body.nome, 40);
   if (nome.length < 2) return erro(res, 'Informe o nome da função.');
+  if (!/[\p{L}\p{N}]/u.test(nome)) return erro(res, 'O nome da função precisa ter letras ou números.'); // ".." não poderia ser excluída
   // Um cadastro de cada vez: dois pedidos juntos não criam a mesma função duas vezes
   const criou = await comTrava('funcoes', async () => {
     const existe = (await store.list('Funcoes', { fresco: true })).some(f => f.nome.toLowerCase() === nome.toLowerCase());
@@ -428,13 +484,18 @@ app.post('/api/admin/funcoes', exigeAdmin, wrap(async (req, res) => {
 // o nome da função como texto, então os resumos continuam iguais depois da exclusão.
 app.delete('/api/admin/funcoes/:nome', exigeAdmin, wrap(async (req, res) => {
   const nome = String(req.params.nome);
-  const f = (await store.list('Funcoes')).find(x => x.nome === nome);
-  if (!f) return erro(res, 'Função não encontrada.', 404);
-  const usando = (await store.list('Colaboradores')).filter(c => c.funcao === nome);
-  if (usando.length) {
-    return erro(res, `A função "${nome}" está no cadastro de ${usando.length} colaborador${usando.length === 1 ? '' : 'es'} (${usando.slice(0, 3).map(c => c.nome).join(', ')}${usando.length > 3 ? '...' : ''}). Troque a função deles em Editar antes de excluir.`);
-  }
-  await store.remove('Funcoes', f.id);
+  // Mesma trava do cadastro de colaborador: ninguém recebe esta função enquanto ela é excluída
+  const r = await comTrava('colaboradores', async () => {
+    const f = (await store.list('Funcoes', { fresco: true })).find(x => x.nome === nome);
+    if (!f) return { erro: 'Função não encontrada.', status: 404 };
+    const usando = (await store.list('Colaboradores', { fresco: true })).filter(c => c.funcao === nome);
+    if (usando.length) {
+      return { erro: `A função "${nome}" está no cadastro de ${usando.length} colaborador${usando.length === 1 ? '' : 'es'} (${usando.slice(0, 3).map(c => c.nome).join(', ')}${usando.length > 3 ? '...' : ''}). Troque a função deles em Editar antes de excluir.` };
+    }
+    await store.remove('Funcoes', f.id);
+    return {};
+  });
+  if (r.erro) return erro(res, r.erro, r.status || 400);
   res.json({ ok: true });
 }));
 
@@ -452,7 +513,7 @@ async function validarColab(body, idAtual) {
   const cpfDigitado = texto(body.cpf, 20), cpf = cpfFormatado(cpfDigitado);
   if (cpfDigitado && !cpf) return { erro: 'CPF inválido. Confira os números.' };
   if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return { erro: 'Usuário: de 3 a 30 letras minúsculas, números, ponto ou traço, sem espaços.' };
-  const funcoes = (await store.list('Funcoes')).map(f => f.nome);
+  const funcoes = (await store.list('Funcoes', { fresco: true })).map(f => f.nome);
   if (!funcoes.includes(funcao)) return { erro: 'Escolha uma função cadastrada.' };
   const todos = await store.list('Colaboradores', { fresco: true });
   if (todos.some(c => c.usuario === usuario && c.id !== idAtual)) return { erro: 'Esse usuário já está em uso.' };
@@ -477,6 +538,7 @@ app.put('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
   const campos = {};
   if ('ativo' in req.body) campos.ativo = !!req.body.ativo;
+  if (campos.ativo === false) campos.sessaoEpoca = novoId(); // derruba os logins abertos, mesmo se for reativado depois
   let senha;
   if (req.body.novaSenha) { senha = senhaTemporaria(); campos.senhaHash = hashSenha(senha); }
   const c = await comTrava('colaboradores', async () => { // mesma trava do cadastro (o usuário pode mudar aqui)
@@ -509,8 +571,8 @@ app.delete('/api/admin/colaboradores/:id', exigeAdmin, wrap(async (req, res) => 
 }));
 
 // ---- prestações (lançadas pelo Maurício) ----
-async function validarPrestacao(body, atual) {
-  const colab = (await store.list('Colaboradores')).find(c => c.id === String(body.colaboradorId || ''));
+async function validarPrestacao(body, atual, leitura) {
+  const colab = (await store.list('Colaboradores', leitura)).find(c => c.id === String(body.colaboradorId || ''));
   if (!colab) return { erro: 'Escolha o colaborador.' };
   const mesmoColab = atual && atual.colaboradorId === colab.id;
   if (!colab.ativo && !mesmoColab) return { erro: `${colab.nome} está desativado. Reative o colaborador para lançar uma prestação nova.` };
@@ -537,19 +599,28 @@ async function validarPrestacao(body, atual) {
   return p;
 }
 
+// Valida e grava dentro da trava do colaborador (a mesma da exclusão): não fica prestação de colaborador
+// que foi excluído no mesmo instante
 app.post('/api/admin/prestacoes', exigeAdmin, wrap(async (req, res) => {
-  const p = await validarPrestacao(req.body);
-  if (p.erro) return erro(res, p.erro);
-  const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
-  await store.add('Prestacoes', nova);
-  res.status(201).json(publicoPrest(nova));
+  const r = await comTrava(chaveFechar(String(req.body.colaboradorId || '')), async () => {
+    const p = await validarPrestacao(req.body, undefined, { fresco: true });
+    if (p.erro) return p;
+    const nova = { id: novoId(), ...p, criadoEm: new Date().toISOString(), fotos: '' };
+    await store.add('Prestacoes', nova);
+    return nova;
+  });
+  if (r.erro) return erro(res, r.erro);
+  res.status(201).json(publicoPrest(r));
 }));
 app.put('/api/admin/prestacoes/:id', exigeAdmin, wrap(async (req, res) => {
   const anterior = (await store.list('Prestacoes')).find(x => x.id === String(req.params.id));
   if (!anterior) return erro(res, 'Prestação não encontrada.', 404);
-  const p = await validarPrestacao(req.body, anterior);
-  if (p.erro) return erro(res, p.erro);
-  const atual = await store.update('Prestacoes', String(req.params.id), p);
+  const atual = await comTrava(chaveFechar(String(req.body.colaboradorId || '')), async () => {
+    const p = await validarPrestacao(req.body, anterior, { fresco: true });
+    if (p.erro) return p;
+    return store.update('Prestacoes', String(req.params.id), p);
+  });
+  if (atual && atual.erro) return erro(res, atual.erro);
   if (!atual) return erro(res, 'Prestação não encontrada.', 404);
   res.json(publicoPrest(atual));
 }));
@@ -651,18 +722,23 @@ app.post('/api/admin/periodos/fechar', exigeAdmin, wrap(async (req, res) => {
 app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
   const r = await comTrava(chavePeriodo(id), async () => {
-    const p = await acharPeriodo(id);
-    if (!p) return { erro: 'Período não encontrado.', status: 404 };
-    if (p.status !== ENVIADO) return { erro: 'Este período já foi pago.', status: 409 };
-    const notas = (await store.list('Despesas', { fresco: true })).filter(d => d.periodoId === id);
-    const anal = notas.filter(d => d.status === STATUS.analise).length;
-    if (anal) return { erro: `Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise neste período. Aprove ou recuse antes de pagar.` };
-    const aprov = notas.filter(d => d.status === STATUS.aprovada);
-    if (!aprov.length) return { erro: 'Nenhuma despesa aprovada neste período. Reabra o período ou aprove as notas antes de pagar.' };
-    const agora = new Date().toISOString();
-    const pago = await store.update('Periodos', id, { status: PAGO, pagoEm: agora, pagoPor: ADMIN_NOME,
-      valorPago: r2(aprov.reduce((t, d) => t + d.valor, 0)) }, a => a.status === ENVIADO);
-    return pago ? { periodo: pago } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
+    const p0 = await acharPeriodo(id);
+    if (!p0) return { erro: 'Período não encontrado.', status: 404 };
+    // dentro também da trava do colaborador: não paga um período que ainda está sendo montado (fechar período)
+    return comTrava(chaveFechar(p0.colaboradorId), async () => {
+      const p = await acharPeriodo(id);
+      if (!p) return { erro: 'Período não encontrado.', status: 404 };
+      if (p.status !== ENVIADO) return { erro: 'Este período já foi pago.', status: 409 };
+      const notas = (await store.list('Despesas', { fresco: true })).filter(d => d.periodoId === id);
+      const anal = notas.filter(d => d.status === STATUS.analise).length;
+      if (anal) return { erro: `Ainda há ${anal} despesa${anal > 1 ? 's' : ''} em análise neste período. Aprove ou recuse antes de pagar.` };
+      const aprov = notas.filter(d => d.status === STATUS.aprovada);
+      if (!aprov.length) return { erro: 'Nenhuma despesa aprovada neste período. Reabra o período ou aprove as notas antes de pagar.' };
+      const agora = new Date().toISOString();
+      const pago = await store.update('Periodos', id, { status: PAGO, pagoEm: agora, pagoPor: ADMIN_NOME,
+        valorPago: r2(aprov.reduce((t, d) => t + d.valor, 0)) }, a => a.status === ENVIADO);
+      return pago ? { periodo: pago } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
+    });
   });
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.json(r);
@@ -693,24 +769,29 @@ app.post('/api/admin/periodos/:id/reabrir', exigeAdmin, wrap(async (req, res) =>
 app.post('/api/admin/periodos/:id/desfazer-pagamento', exigeAdmin, wrap(async (req, res) => {
   const id = String(req.params.id);
   const r = await comTrava(chavePeriodo(id), async () => {
-    const p = await acharPeriodo(id);
-    if (!p) return { erro: 'Pagamento não encontrado.', status: 404 };
-    if (p.status !== PAGO) return { erro: 'Este período ainda não foi pago.', status: 409 };
-    if (!Regras.antesDoSistema(p)) {
-      const volta = await store.update('Periodos', id, { status: ENVIADO, pagoEm: '', pagoPor: '', valorPago: 0 }, a => a.status === PAGO);
-      return volta ? { periodo: volta } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
-    }
-    try {
-      for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === id)) {
-        await store.update('Despesas', d.id, { periodoId: '' }, a => a.periodoId === id);
+    const p0 = await acharPeriodo(id);
+    if (!p0) return { erro: 'Pagamento não encontrado.', status: 404 };
+    // dentro também da trava do colaborador: não cruza com um "Já foram pagas" que ainda está gravando
+    return comTrava(chaveFechar(p0.colaboradorId), async () => {
+      const p = await acharPeriodo(id);
+      if (!p) return { erro: 'Pagamento não encontrado.', status: 404 };
+      if (p.status !== PAGO) return { erro: 'Este período ainda não foi pago.', status: 409 };
+      if (!Regras.antesDoSistema(p)) {
+        const volta = await store.update('Periodos', id, { status: ENVIADO, pagoEm: '', pagoPor: '', valorPago: 0 }, a => a.status === PAGO);
+        return volta ? { periodo: volta } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
       }
-    } catch (e) { // falha no meio: o pagamento fica só com as que sobraram, com o valor certo (repetir termina)
-      const restam = (await store.list('Despesas', { fresco: true }).catch(() => [])).filter(x => x.periodoId === id && x.status === STATUS.aprovada);
-      await store.update('Periodos', id, { valorPago: r2(restam.reduce((t, d) => t + d.valor, 0)) }).catch(() => {});
-      throw e;
-    }
-    await store.remove('Periodos', id);
-    return { ok: true };
+      try {
+        for (const d of (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === id)) {
+          await store.update('Despesas', d.id, { periodoId: '' }, a => a.periodoId === id);
+        }
+      } catch (e) { // falha no meio: o pagamento fica só com as que sobraram, com o valor certo (repetir termina)
+        const restam = (await store.list('Despesas', { fresco: true }).catch(() => [])).filter(x => x.periodoId === id && x.status === STATUS.aprovada);
+        await store.update('Periodos', id, { valorPago: r2(restam.reduce((t, d) => t + d.valor, 0)) }).catch(() => {});
+        throw e;
+      }
+      await store.remove('Periodos', id);
+      return { ok: true };
+    });
   });
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.json(r);
@@ -746,7 +827,9 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
       await store.remove('Periodos', pg.id);
       return { erro: 'As despesas antigas mudaram enquanto você decidia. Confira a tela de novo.', status: 409 };
     }
-    return { pagamento: await store.update('Periodos', pg.id, { valorPago: r2(soma) }), notas: n };
+    const pagamento = await store.update('Periodos', pg.id, { valorPago: r2(soma) });
+    if (!pagamento) return { erro: 'O pagamento mudou em outra tela enquanto era gravado. Confira a tela de novo.', status: 409 };
+    return { pagamento, notas: n };
   });
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.status(201).json(r);
@@ -769,6 +852,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ erro: 'Erro interno. Tente novamente.' });
 });
 
+// Grava um valor na aba Config (cria a linha na primeira vez)
+async function gravarConfig(id, valorConfig) {
+  if (!(await store.update('Config', id, { valor: valorConfig }))) await store.add('Config', { id, valor: valorConfig });
+}
 async function iniciar() {
   await store.init();
   // Início do controle de pagamentos: gravado uma vez só (INICIO_PERIODOS no ambiente serve para os testes)
@@ -778,6 +865,7 @@ async function iniciar() {
     INICIO_PERIODOS = INICIO_PERIODOS || new Date().toISOString();
     await store.add('Config', { id: 'inicioPeriodos', valor: INICIO_PERIODOS });
   }
+  EPOCA_ADMIN = ((await store.list('Config')).find(c => c.id === 'sessaoAdmin') || {}).valor || '';
   // Cria as funções iniciais na primeira vez
   if (!(await store.list('Funcoes')).length) {
     for (const nome of FUNCOES_INICIAIS) await store.add('Funcoes', { id: novoId(), nome, criadoEm: new Date().toISOString() });

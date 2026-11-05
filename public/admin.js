@@ -19,6 +19,9 @@ const CORES_FUNCAO = ['b-purple', 'b-pink', 'b-blue', 'b-amber', 'b-green', 'b-g
 const { STATUS, PAGO, PAGA, naoEnviada, antesDoSistema } = Regras;
 
 let D = null;          // dados vindos do servidor
+// Com a tela de login à mostra (a sessão caiu no meio de uma ação), o aviso de erro da ação não aparece por cima dela
+const avisarNoPainel = window.avisar;
+window.avisar = (...args) => ($('v-login').classList.contains('hidden') ? avisarNoPainel(...args) : Promise.resolve());
 let CAT = [];          // categorias
 const F = {            // filtros de cada tela (ficam guardados ao trocar de tela)
   l: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '', colab: '', busca: '' },
@@ -42,7 +45,10 @@ async function api(url, opts = {}) {
   catch { throw new Error('Sem conexão com a internet. Confira a rede e tente de novo.'); } // o navegador diria só "Failed to fetch"
   const corpo = await r.json().catch(() => ({}));
   notaVersao(r);
-  if (r.status === 401 && !url.endsWith('/login')) { mostrarLogin(); throw new Error('Faça login.'); }
+  if (r.status === 401 && !url.endsWith('/login')) {
+    mostrarLogin(D ? 'Sua sessão expirou. Entre de novo.' : ''); // sessão caiu: volta ao login explicando
+    throw Object.assign(new Error('Faça login.'), { login: true });
+  }
   if (!r.ok) throw Object.assign(new Error(corpo.erro || 'Erro de conexão.'), { status: r.status });
   return corpo;
 }
@@ -438,7 +444,9 @@ function telaDespesas() {
   document.querySelectorAll('tr[data-desp]').forEach(tr => tr.addEventListener('click', () => modalNota(acha(tr.dataset.desp))));
   // Totais separados por status: "aprovadas" bate com o Lançamentos; em análise e recusadas não se misturam
   const porStatus = st => rows.filter(d => d.status === st);
-  const totaisPorStatus = [['Total aprovadas', porStatus(STATUS.aprovada)], ['Total em análise', porStatus(STATUS.analise)],
+  // "aprovadas" inclui as já pagas (bate com o Excel de Lançamentos); a linha de baixo mostra quanto disso já foi pago
+  const totaisPorStatus = [['Total aprovadas (inclui as pagas)', porStatus(STATUS.aprovada)], ['   Destas, já pagas', rows.filter(d => statusVisto(d) === PAGA)],
+    ['Total em análise', porStatus(STATUS.analise)],
     ...(porStatus(STATUS.recusada).length ? [['Total recusadas (não entram no pagamento)', porStatus(STATUS.recusada)]] : [])];
   $('d-exp').addEventListener('click', () => exportar(`despesas-celular-${f.ano}${f.mes ? '-' + f.mes : ''}${f.status ? '-' + semAcento(f.status).replace(/\W+/g, '-') : ''}`, 'Despesas do celular',
     [col('Data', 12), col('Colaborador', 26), col('Função', 14), col('Categoria', 14), col('Valor', 12, true), col('Observação', 34), col('Status', 12), col('Avaliada em', 14), col('Período', 24), col('Foto', 7)],
@@ -858,12 +866,12 @@ function telaPagamentos() {
       <tbody>${rows.map(l => {
         const na = l.notas.filter(d => d.status === STATUS.analise).length;
         const pago = l.tipo === 'pago';
-        const status = pago ? `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>${antesDoSistema(l) ? '<br><span class="muted small">pago antes do sistema</span>' : ''}`
+        const status = pago ? (antesDoSistema(l) ? '<span class="badge b-blue">Pago antes do sistema</span>' : `<span class="badge b-blue">Pago em ${diaBR(l.pagoEm).slice(0, 5)}</span>`)
           : na ? '<span class="badge b-gray">Aguardando análise</span>'
           : prontaParaPagar(l) ? '<span class="badge b-amber">Aguardando pagamento</span>' : '<span class="badge b-gray">Sem despesas aprovadas</span>';
         return `<tr>
         <td class="b">${esc(l.colaborador)}</td>
-        <td>${rotPeriodo(l)}${antesDoSistema(l) ? '' : `<br><span class="muted small">enviado em ${diaBR(l.fechadoEm)}${l.fechadoPor && l.fechadoPor !== l.colaborador ? ' por ' + esc(l.fechadoPor) : ''}</span>`}</td>
+        <td>${rotPeriodo(l)}${antesDoSistema(l) ? '' : `<br><span class="muted small">enviado em ${diaBR(l.fechadoEm)}${l.fechadoPor && l.fechadoPor !== (l.nomeEpoca || l.colaborador) ? ' por ' + esc(l.fechadoPor) : ''}</span>`}</td>
         <td style="white-space:nowrap">${l.notas.length}${na ? ` <span class="badge b-amber">${na} em análise</span>` : ''}</td>
         <td class="num b">${fmt(pago ? l.valorPago : somaAprov(l.notas))}</td>
         <td>${status}</td>
@@ -878,7 +886,7 @@ function telaPagamentos() {
     <p class="muted small">Só dá para pagar depois de aprovar ou recusar todas as notas do período. "Reabrir" devolve as despesas ao colaborador como não enviadas (ex.: para ele juntar com outras e enviar de novo).</p>`;
 
   const acha = id => linhasPagamento().find(l => l.id === id);
-  const acao = (url, corpo) => async () => { try { await post(url, corpo); await carregar(); telaPagamentos(); } catch (e) { await carregar(); telaPagamentos(); avisar(e.message, 'Não foi possível concluir'); } };
+  const acao = (url, corpo) => async () => { try { await post(url, corpo); await carregar(); telaPagamentos(); } catch (e) { if (e.login) return; await carregar().catch(() => {}); if (D) telaPagamentos(); avisar(e.message, 'Não foi possível concluir'); } };
   const url = (id, op) => '/api/admin/periodos/' + encodeURIComponent(id) + '/' + op;
   $('p-colab').onchange = e => { f.colab = e.target.value; telaPagamentos(); };
   document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; telaPagamentos(); });
@@ -904,7 +912,7 @@ function telaPagamentos() {
   });
   document.querySelectorAll('[data-reabrir]').forEach(b => b.onclick = async () => {
     const l = acha(b.dataset.reabrir);
-    if (!(await confirmar(`O envio de ${l.colaborador} (${rotPeriodo(l)}) é desfeito: as ${l.notas.length} despesa${l.notas.length === 1 ? '' : 's'} voltam a ficar "não enviadas" no app, e ele pode enviar de novo.`, { titulo: 'Reabrir período?', ok: 'Reabrir', perigo: true }))) return;
+    if (!(await confirmar(`O envio de ${l.colaborador} (${rotPeriodo(l)}) é desfeito: as ${l.notas.length} despesa${l.notas.length === 1 ? '' : 's'} voltam a ficar "não enviadas" no app, e a pessoa pode enviar de novo.`, { titulo: 'Reabrir período?', ok: 'Reabrir', perigo: true }))) return;
     acao(url(l.id, 'reabrir'))();
   });
   document.querySelectorAll('[data-despagar]').forEach(b => b.onclick = async () => {
@@ -941,7 +949,8 @@ function modalFecharPeriodo() {
   m.querySelector('#m-ok').onclick = e => travando(e.currentTarget, async () => {
     try { await post('/api/admin/periodos/fechar', { colaboradorId: m.querySelector('#m-colab').value }); fecharModal(); await carregar(); telaPagamentos(); }
     catch (err) { // mudou em outra aba (ex.: já fechado): atualiza a tela e mostra o motivo
-      fecharModal(); await carregar().catch(() => {}); telaPagamentos(); avisar(err.message, 'Não foi possível fechar');
+      if (err.login) return;
+      fecharModal(); await carregar().catch(() => {}); if (D) telaPagamentos(); avisar(err.message, 'Não foi possível fechar');
     }
   });
 }
@@ -1143,11 +1152,21 @@ async function atualizarSozinho() {
 setInterval(atualizarSozinho, ATUALIZA_MS);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizarSozinho(); });
 
-function mostrarLogin() { $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden'); }
+// Volta ao login: fecha a janela aberta e tira os dados da memória da página (a atualização automática para,
+// porque só roda com D carregado). A tela de baixo fica como está: o que foi digitado numa prestação continua lá.
+function mostrarLogin(motivo = '') {
+  fecharModal();
+  D = null;
+  $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden');
+  $('a-erro').textContent = motivo;
+  $('a-erro').classList.toggle('hidden', !motivo);
+}
 async function mostrarPainel(me) {
   $('who-nome').textContent = me.nome;
   await carregar();
   $('v-login').classList.add('hidden'); $('v-painel').classList.remove('hidden');
+  // Entrou de novo depois de a sessão cair no meio de uma prestação: mantém o formulário com o que já foi digitado
+  if (rota()[0] === 'nova' && $('n-form')) return;
   render();
 }
 $('v-login').addEventListener('submit', async e => {
@@ -1160,7 +1179,7 @@ $('v-login').addEventListener('submit', async e => {
   } catch (err) { $('a-erro').textContent = err.message; $('a-erro').classList.remove('hidden'); }
 });
 $('b-backup').addEventListener('click', baixarBackup);
-$('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} D = null; mostrarLogin(); });
+$('b-sair').addEventListener('click', async () => { try { await fetch('/api/admin/logout', { method: 'POST' }); } catch {} mostrarLogin(); $('page').innerHTML = ''; });
 
 (async () => {
   try { await mostrarPainel(await api('/api/admin/me')); } catch { mostrarLogin(); }

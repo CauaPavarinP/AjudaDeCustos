@@ -9,7 +9,8 @@ const TABELAS = {
   Colaboradores: {
     cols: [['id', 'ID'], ['nome', 'Nome'], ['usuario', 'Usuario'], ['funcao', 'Funcao'], ['ativo', 'Ativo'], ['senhaHash', 'SenhaHash'], ['criadoEm', 'CriadoEm'],
       ['telefone', 'Telefone'], ['cidade', 'Cidade'], ['uf', 'UF'],
-      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX']],
+      ['banco', 'Banco'], ['agencia', 'Agencia'], ['conta', 'Conta'], ['cpf', 'CPF'], ['pix', 'PIX'],
+      ['sessaoEpoca', 'SessaoEpoca']], // muda ao sair ou ser desativado: derruba os logins abertos
     bool: ['ativo'],
   },
   Funcoes: {
@@ -108,11 +109,18 @@ function criarStoreMemoria() {
 }
 
 // ---------------- Google Sheets ----------------
+// Limite de uso do Google (erro 429, "muitas gravações por minuto"): espera e tenta de novo (2, 4, 8, 16, 30, 30 s),
+// em vez de falhar no meio de um "Fechar período" ou de um pagamento. Só para o 429: nele o Google recusa
+// o pedido sem gravar nada, então repetir não duplica linhas.
+const RETENTATIVA_GOOGLE = {
+  limit: 6, methods: ['get', 'put', 'post', 'delete'], statusCodes: [429], afterStatusCodes: [429],
+  maxRetryAfter: 60000, backoffLimit: 30000, delay: n => Math.min(2000 * 2 ** (n - 1), 30000),
+};
 function criarStoreSheets({ spreadsheetId, email, privateKey }) {
   const { GoogleSpreadsheet } = require('google-spreadsheet');
   const { JWT } = require('google-auth-library');
   const auth = new JWT({ email, key: privateKey, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
-  const doc = new GoogleSpreadsheet(spreadsheetId, auth);
+  const doc = new GoogleSpreadsheet(spreadsheetId, auth, { retryConfig: RETENTATIVA_GOOGLE });
 
   // Cache curto para não estourar a cota de leitura da API do Google.
   // versao[t] muda a cada gravação: uma leitura que começou antes de uma gravação não entra no cache
@@ -206,4 +214,4 @@ function criarStore(env) {
   return criarStoreMemoria();
 }
 
-module.exports = { criarStore, novoId, paraNumero };
+module.exports = { criarStore, novoId, paraNumero , RETENTATIVA_GOOGLE };

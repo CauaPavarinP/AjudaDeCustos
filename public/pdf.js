@@ -37,7 +37,7 @@
     const paginas = [];
     let atual = null;
     const largura = (txt, tam = 12, negrito = false) =>
-      [...String(txt ?? '')].reduce((s, ch) => s + larguraChar(ch, negrito), 0) * tam / 1000;
+      [...String(txt ?? '').normalize('NFC')].reduce((s, ch) => s + larguraChar(ch, negrito), 0) * tam / 1000;
     const y = v => A4.alt - v; // o PDF conta de baixo para cima; aqui contamos de cima para baixo
     const doc = {
       larg: A4.larg, alt: A4.alt, largura,
@@ -47,7 +47,7 @@
         if (!s) return doc;
         const w = largura(s, tam, o.negrito);
         const x0 = o.alinhar === 'centro' ? x - w / 2 : o.alinhar === 'dir' ? x - w : x;
-        const bytes = [...s].map(ch => { const c = codigo(ch); return c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : String.fromCharCode(c); }).join('');
+        const bytes = [...s.normalize('NFC')].map(ch => { const c = codigo(ch); return c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : String.fromCharCode(c); }).join('');
         atual.push(`BT ${cor(o.cor)} rg /${o.negrito ? (o.italico ? 'F3' : 'F2') : 'F1'} ${num(tam)} Tf ${num(x0)} ${num(y(yy))} Td (${bytes}) Tj ET`);
         return doc;
       },

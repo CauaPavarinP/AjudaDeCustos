@@ -37,9 +37,9 @@
     return new Blob([...partes, ...central, fim], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   }
 
-  // tira os caracteres de controle que o XML não aceita
+  // tira o que o XML do Excel não aceita (controles, U+FFFE/U+FFFF e metades soltas de emoji): senão o arquivo abre "corrompido"
   // eslint-disable-next-line no-control-regex
-  const xml = s => String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+  const xml = s => String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '')
     .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const letra = i => { let s = ''; for (i++; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
   const nomeAba = (s, i) => (String(s || 'Aba ' + (i + 1)).replace(/[[\]:*?/\\]/g, ' ').slice(0, 31)) || 'Aba ' + (i + 1);

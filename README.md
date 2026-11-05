@@ -16,8 +16,8 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 - **Função:** cada lançamento guarda a função do colaborador no momento em que foi feito.
 - **Detalhe dos resumos:** em "Resumo por colaborador" e "Resumo por função", clicar num valor da tabela abre o que formou aquele número: as despesas aprovadas do celular, uma a uma (com "ver nota"), e as prestações do painel com o valor daquela categoria (com "abrir"). Clicar no Total mostra todas as categorias, separadas.
 - **Mês de referência:** por padrão, o mês da data inicial (regra final ainda a definir com o Maurício).
-- **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados.
-- **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login no mesmo aparelho, ou de 20 tentativas erradas na mesma conta vindas de qualquer lugar. Trocar o `SESSION_SECRET` desconecta todo mundo.
+- **Login:** dura 12 horas. A sessão fica num cookie assinado com o `SESSION_SECRET`, então ninguém é deslogado quando o Render reinicia ou "dorme". Quando a senha muda ("Nova senha" no painel, troca em Perfil ou troca do `ADMIN_PASSWORD`), os outros aparelhos logados com a senha antiga são desconectados. **Sair** também invalida o login em todos os aparelhos daquela pessoa (um cookie copiado, de um celular perdido, por exemplo, não serve mais), e desativar um colaborador derruba os logins dele, mesmo que ele seja reativado depois.
+- **Segurança:** senhas com scrypt; bloqueio de 10 minutos depois de 5 tentativas erradas de login no mesmo aparelho, ou de 20 tentativas erradas na mesma conta vindas de qualquer lugar. Trocar o `SESSION_SECRET` desconecta todo mundo. Trocar a senha em Perfil também tem limite de 5 tentativas erradas. Cada colaborador pode enviar até 20 despesas ou fotos por minuto (e 150 por dia), para ninguém esgotar a cota do Cloudinary e da planilha. As páginas só rodam código e carregam imagens do próprio sistema (cabeçalho de segurança CSP). Em produção, o log avisa se o `SESSION_SECRET` tiver menos de 32 caracteres ou se a `ADMIN_PASSWORD` for fraca. Quando o Google limita as gravações (muitas por minuto), o sistema espera e tenta de novo, em vez de parar no meio de um fechamento ou pagamento.
 - **Excel:** os botões "Exportar Excel" geram um `.xlsx` com colunas ajustadas e valores em formato numérico.
 - **Períodos e pagamento:**
   - **No app:** o colaborador lança as notas e, quando quiser (ex.: de 18 a 27), toca em **"Fechar período e enviar"**. Todas as despesas ainda não enviadas, em análise ou aprovadas, viram um período, com as datas da nota mais antiga à mais recente. Elas ficam travadas: não dá mais para excluir nem trocar a foto. Despesas lançadas depois entram no próximo período.
@@ -42,12 +42,12 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 
 Crie uma planilha nova e compartilhe com o e-mail da Service Account como **Editor**. Pode ser a mesma Service Account da Fila de Atendimento. Ao iniciar, o sistema cria sozinho as abas:
 
-- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm, Telefone, Cidade, UF, Banco, Agencia, Conta, CPF, PIX (as colunas a partir de Telefone são opcionais e criadas sozinhas)
+- `Colaboradores`: ID, Nome, Usuario, Funcao, Ativo, SenhaHash, CriadoEm, Telefone, Cidade, UF, Banco, Agencia, Conta, CPF, PIX, SessaoEpoca (as colunas a partir de Telefone são opcionais e criadas sozinhas; SessaoEpoca é preenchida pelo sistema quando a pessoa sai ou é desativada)
 - `Funcoes`: ID, Nome, CriadoEm
 - `Prestacoes`: ID, ColaboradorID, Colaborador, Funcao, DataInicial, DataFinal, MesReferencia, Combustivel, Alimentacao, Degustacao, Hotel, Transporte, Outros, Total, Observacao, CriadoEm, Fotos (referências das fotos separadas por `|`; criada sozinha)
 - `Despesas`: ID, ColaboradorID, Colaborador, Funcao, Data, Categoria, Valor, Observacao, Status, EnviadaEm, AvaliadaEm, AvaliadaPor, Foto, PeriodoID (as colunas Foto e PeriodoID são criadas sozinhas em planilhas que já existem). PeriodoID fica vazio enquanto a despesa não foi enviada; depois guarda o ID do período (ou `liberada`, para uma despesa antiga que voltou a poder entrar num período)
 - `Periodos`: ID, ColaboradorID, Colaborador, DataInicial, DataFinal, Status (`Enviado` ou `Pago`), FechadoEm, FechadoPor, PagoEm, PagoPor, ValorPago
-- `Config`: ID, Valor. Guarda `inicioPeriodos`, a data em que o controle de pagamentos começou (não altere)
+- `Config`: ID, Valor. Guarda `inicioPeriodos`, a data em que o controle de pagamentos começou, e `sessaoAdmin`, que muda quando o painel é encerrado em Sair (não altere)
 
 > Não renomeie as abas nem as colunas, e não edite os IDs nem a coluna SenhaHash à mão.
 

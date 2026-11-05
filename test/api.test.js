@@ -52,7 +52,7 @@ function cliente(base = B) { // base: outro servidor (usado num teste com config
     setCookie: c => { cookie = c; }, get cookie() { return cookie; },
   };
 }
-const fotoFake = () => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7)]).toString('base64');
+const fotoFake = () => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7), Buffer.from([0xff, 0xd9])]).toString('base64');
 const ontem = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
 async function adminLogado() {
@@ -84,10 +84,31 @@ test('assinatura do Cloudinary segue o formato documentado', () => {
   const esperado = require('node:crypto').createHash('sha1').update('public_id=a&timestamp=1&type=authenticated' + 'seg').digest('hex');
   assert.equal(assinar({ type: 'authenticated', timestamp: 1, public_id: 'a' }, 'seg'), esperado);
 });
+test('planilha: limite do Google (429) espera e tenta de novo, sem desistir no meio', async () => {
+  const { RETENTATIVA_GOOGLE } = require('../services/store');
+  const ky = (await import('ky')).default;
+  let pedidos = 0;
+  const srv = require('node:http').createServer((req, res) => {
+    pedidos++;
+    if (pedidos <= 2) { res.writeHead(429); return res.end('{}'); }
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
+  });
+  await new Promise(r => srv.listen(0, r));
+  try {
+    // mesma configuração da planilha, só com espera curta para o teste não demorar
+    const api = ky.create({ retry: { ...RETENTATIVA_GOOGLE, delay: () => 10 } });
+    const r = await api.post(`http://127.0.0.1:${srv.address().port}/gravar`, { json: { a: 1 } }).json();
+    assert.deepEqual(r, { ok: true });
+    assert.equal(pedidos, 3, 'duas recusas por limite e a terceira tentativa grava');
+    assert.ok(RETENTATIVA_GOOGLE.delay(1) >= 2000 && RETENTATIVA_GOOGLE.limit >= 5, 'na planilha espera de verdade');
+  } finally { srv.close(); }
+});
 test('foto: só aceita JPEG válido', () => {
   assert.ok(lerDataUrl(fotoFake()).buf);
   assert.ok(lerDataUrl('data:image/png;base64,AAAA').erro);
   assert.ok(lerDataUrl('data:image/jpeg;base64,' + Buffer.alloc(300).toString('base64')).erro);
+  // começa como JPEG mas não termina como um (ex.: outro arquivo disfarçado)
+  assert.ok(lerDataUrl('data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from('<html>'.repeat(30))]).toString('base64')).erro);
 });
 
 // ---------------- servidor ----------------
@@ -321,6 +342,69 @@ test('travas de exclusão: colaborador com histórico e função em uso', async 
   assert.equal((await a.del('/api/admin/colaboradores/' + livre.id)).status, 200);
 });
 
+test('sair invalida o login: um cookie copiado não serve mais (app e painel)', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const copia = cliente(); copia.setCookie(c.cookie);
+  assert.equal((await copia.get('/api/me')).status, 200);
+  await c.post('/api/logout');
+  assert.equal((await copia.get('/api/me')).status, 401, 'cookie do colaborador copiado antes de sair');
+  const a2 = await adminLogado();
+  const copiaA = cliente(); copiaA.setCookie(a2.cookie);
+  await a2.post('/api/admin/logout');
+  assert.equal((await copiaA.get('/api/admin/dados')).status, 401, 'cookie do painel copiado antes de sair');
+  assert.equal((await (await adminLogado()).get('/api/admin/dados')).status, 200, 'entrar de novo funciona');
+});
+
+test('reativar colaborador não traz de volta o login antigo', async () => {
+  const a = await adminLogado();
+  const { c, id } = await novoColaborador(a);
+  await a.put('/api/admin/colaboradores/' + id, { ativo: false });
+  await a.put('/api/admin/colaboradores/' + id, { ativo: true });
+  assert.equal((await c.get('/api/me')).status, 401);
+});
+
+test('limites: troca de senha e quantidade de envios', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  for (let i = 0; i < 5; i++) assert.equal((await c.post('/api/me/senha', { atual: 'errada' + i, nova: 'novasenha1' })).status, 400);
+  assert.equal((await c.post('/api/me/senha', { atual: 'errada', nova: 'novasenha1' })).status, 429, 'bloqueia depois de 5 erros');
+  const { c: c2 } = await novoColaborador(a);
+  const r = [];
+  for (let i = 0; i < 21; i++) r.push((await c2.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 1 })).status);
+  assert.equal(r.filter(x => x === 201).length, 20);
+  assert.equal(r[20], 429, 'o 21º envio no mesmo minuto é recusado');
+});
+
+test('textos: caracteres invisíveis, acentos separados e emoji cortado', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  assert.equal((await c.post('/api/despesas', { data: ontem(), categoria: 'Outros', valor: 5, observacao: '\u200b' })).status, 400, 'invisível não vale como observação');
+  const nfd = 'Jose\u0301 Conceic\u0327a\u0303o';
+  const r = await a.post('/api/admin/colaboradores', { nome: nfd, usuario: 'nfd' + Date.now().toString(36), funcao: 'Vendedor' });
+  assert.equal(r.dados.nome, 'José Conceição', 'acentos juntados (NFC)');
+  const obs = 'x'.repeat(199) + '\u{1F600}' + '\ufffe';
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 5, observacao: obs })).dados;
+  assert.ok(!/[\ud800-\udfff]$/.test(d.observacao.slice(-1)) || /\u{1F600}$/u.test(d.observacao), 'emoji inteiro ou fora');
+  assert.ok(!d.observacao.includes('\ufffe'));
+  assert.equal((await a.post('/api/admin/funcoes', { nome: '..' })).status, 400, 'função só com pontos');
+});
+
+test('cabeçalhos de segurança e prestação junto com a exclusão do colaborador', async () => {
+  const h = (await fetch(B + '/admin')).headers;
+  assert.match(h.get('content-security-policy') || '', /default-src 'self'/);
+  const a = await adminLogado();
+  for (let i = 0; i < 10; i++) {
+    const id = (await a.post('/api/admin/colaboradores', { nome: 'Corrida ' + i, usuario: 'corr' + i + Date.now().toString(36), funcao: 'Vendedor' })).dados.id;
+    await Promise.all([
+      a.post('/api/admin/prestacoes', { colaboradorId: id, dataInicial: ontem(), dataFinal: ontem(), mesRef: ontem().slice(0, 7), hotel: 10 }),
+      a.del('/api/admin/colaboradores/' + id),
+    ]);
+  }
+  const d = (await a.get('/api/admin/dados')).dados, ids = new Set(d.colaboradores.map(x => x.id));
+  assert.equal(d.prestacoes.filter(p => !ids.has(p.colaboradorId)).length, 0);
+});
+
 test('colaborador desativado perde o acesso na hora', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);
@@ -464,21 +548,21 @@ test('foto trocada muda a versão (fotoV) para o painel não mostrar a antiga do
   const { c } = await novoColaborador(a);
   const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Hotel', valor: 10, foto: fotoFake() })).dados;
   assert.match(d.fotoV, /^[0-9a-f]{10}$/);
-  const outra = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 9)]).toString('base64');
+  const outra = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 9), Buffer.from([0xff, 0xd9])]).toString('base64');
   assert.equal((await c.put(`/api/despesas/${d.id}/foto`, { foto: outra })).status, 200);
   const noPainel = (await a.get('/api/admin/dados')).dados.despesas.find(x => x.id === d.id);
   assert.ok(noPainel.fotoV && noPainel.fotoV !== d.fotoV, 'a versão deveria mudar');
   assert.ok(!JSON.stringify(noPainel).includes('ajuda-de-custo/'), 'a referência da foto não sai do servidor');
   const img = await a.get(`/api/admin/despesas/${d.id}/foto?v=${noPainel.fotoV}`);
   assert.equal(img.status, 200);
-  assert.equal(img.dados[img.dados.length - 1], 9); // é a foto nova
+  assert.equal(img.dados[img.dados.length - 3], 9); // é a foto nova (antes do fim FF D9)
 });
 
 test('comprovante: remover pela versão; aba desatualizada não apaga a foto errada (409)', async () => {
   const a = await adminLogado();
   const { id: colaboradorId } = await novoColaborador(a);
   const p = (await a.post('/api/admin/prestacoes', { colaboradorId, dataInicial: ontem(), dataFinal: ontem(), mesRef: ontem().slice(0, 7), hotel: 10 })).dados;
-  const foto = n => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, n)]).toString('base64');
+  const foto = n => 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, n), Buffer.from([0xff, 0xd9])]).toString('base64');
   let r;
   for (const n of [1, 2, 3]) r = await a.post(`/api/admin/prestacoes/${p.id}/fotos`, { foto: foto(n) });
   const [vVerm, vAzul, vVerde] = r.dados.fotosV;
@@ -496,5 +580,5 @@ test('comprovante: remover pela versão; aba desatualizada não apaga a foto err
   // abrir pela versão entrega a foto certa
   const img = await a.get(`/api/admin/prestacoes/${p.id}/fotos/0?v=${vVerde}`);
   assert.equal(img.status, 200);
-  assert.equal(img.dados[img.dados.length - 1], 3);
+  assert.equal(img.dados[img.dados.length - 3], 3);
 });

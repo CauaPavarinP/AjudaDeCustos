@@ -287,7 +287,7 @@ function cardPeriodo() {
     ${pend.length ? `<div class="t">${pend.length} despesa${pend.length === 1 ? '' : 's'} ainda não enviada${pend.length === 1 ? '' : 's'} para pagamento <span class="s">(todos os meses)</span></div>
       <div class="s">${brl(pend.reduce((s, d) => s + d.valor, 0))} · de ${faixa(datas[0], datas[datas.length - 1])}</div>
       <button class="btn block" id="i-fechar">Fechar período e enviar</button>` : ''}
-    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `<b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b> aprovado${aprovEnv.length === 1 ? '' : 's'}` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
+    ${enviadas.length ? `<div class="s">Enviadas, aguardando pagamento: ${aprovEnv.length ? `aprovado: <b>${brl(aprovEnv.reduce((s, d) => s + d.valor, 0))}</b>` : ''}${aprovEnv.length && analEnv ? ' · ' : ''}${analEnv ? `${analEnv} em análise pelo Maurício` : ''}</div>` : ''}
   </div>`;
 }
 let fechando = false; // trava contra toque duplo
@@ -324,10 +324,11 @@ function telaDetalhe(d) {
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
   const linha = d.status === STATUS.aprovada ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
-    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
+    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com quem avaliou se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   const linhaPer = !d.periodo ? (d.status !== STATUS.recusada ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
     : d.periodo.status === ANTERIOR ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
+    : paga(d) && d.periodo.antesDoSistema ? '<div class="okline blue">💰 Paga antes do controle de pagamentos pelo app.</div>'
     : paga(d) ? `<div class="okline blue">💰 Paga em ${diaPago(d)} · período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}</div>`
     : `<div class="okline gray">Enviada no período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}${d.status === STATUS.aprovada ? ' · aguardando pagamento' : ''}</div>`;
   // depois de avaliada pelo Maurício ou enviada num período, não muda mais
@@ -335,7 +336,7 @@ function telaDetalhe(d) {
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
-    ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img src="${urlFoto(d)}" alt="Foto da nota" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'muted small',textContent:'Não foi possível carregar a foto.'}))"></a>
+    ? `<a class="foto-prev" href="${urlFoto(d)}" target="_blank" rel="noopener"><img id="d-foto-img" src="${urlFoto(d)}" alt="Foto da nota"></a>
        <span class="tip center">Toque na foto para ampliar.</span>`
     : editavel && fotosLigadas ? '' // a área para enviar a foto já aparece logo abaixo
     : '<div class="photo light"><span style="font-size:28px">🧾</span><span>Sem foto da nota</span></div>'}
@@ -355,6 +356,8 @@ function telaDetalhe(d) {
     ${linhaPer}
     ${editavel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
+  // foto que não abriu: aviso no lugar (sem código no HTML, que a política de segurança da página bloqueia)
+  if ($('d-foto-img')) $('d-foto-img').onerror = e => e.target.replaceWith(Object.assign(document.createElement('span'), { className: 'muted small', textContent: 'Não foi possível carregar a foto.' }));
   if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
   if ($('d-foto')) seletorFoto($('d-foto'), async f => {
     if (!f) return;
