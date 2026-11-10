@@ -10,6 +10,11 @@ const Regras = require('./public/regras');
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
 const ADMIN_NOME = process.env.ADMIN_NOME || 'Maurício';
+// Login de suporte (opcional, variáveis SUPORTE_USER / SUPORTE_PASSWORD / SUPORTE_NOME no Render): entra no mesmo
+// painel e faz tudo o que o administrador faz e, além disso, pode mudar a categoria de uma despesa.
+const SUPORTE_USER = process.env.SUPORTE_USER || '', SUPORTE_PASSWORD = process.env.SUPORTE_PASSWORD || '';
+const SUPORTE_NOME = process.env.SUPORTE_NOME || 'Suporte';
+const temSuporte = () => !!(SUPORTE_USER && SUPORTE_PASSWORD && SUPORTE_USER !== (process.env.ADMIN_USER || 'admin'));
 
 // Categorias de gasto (iguais às colunas da planilha "Resumo prestação de contas")
 const CATEGORIAS = [
@@ -17,7 +22,7 @@ const CATEGORIAS = [
   { chave: 'alimentacao', nome: 'Alimentação' },
   { chave: 'degustacao', nome: 'Degustação' },
   { chave: 'hotel', nome: 'Hotel' },
-  { chave: 'transporte', nome: 'Transporte' },
+  { chave: 'transporte', nome: 'Transp/Pedágio' }, // até 10/11/2026 se chamava "Transporte" (a coluna da planilha continua Transporte)
   { chave: 'outros', nome: 'Outros' },
 ];
 const NOMES_CAT = CATEGORIAS.map(c => c.nome);
@@ -55,6 +60,8 @@ for (const v of ['SESSION_SECRET', 'ADMIN_USER', 'ADMIN_PASSWORD']) {
     console.warn(`[config] ${v} não definida (aceito só em desenvolvimento).`);
   }
 }
+if (SUPORTE_USER && !temSuporte()) console.warn('[config] Login de suporte desligado: falta SUPORTE_PASSWORD ou SUPORTE_USER é igual ao ADMIN_USER.');
+if (PROD && temSuporte() && SUPORTE_PASSWORD.length < 10) console.warn('[segurança] SUPORTE_PASSWORD fraca: use 10 caracteres ou mais.');
 
 const store = criarStore(process.env);
 const fotos = criarFotos(process.env); // null quando o envio de fotos está desligado
@@ -88,6 +95,7 @@ const DURACAO_MS = 12 * 60 * 60 * 1000;
 const hmac = txt => crypto.createHmac('sha256', SEGREDO).update(txt).digest('base64url');
 const versaoSenha = hash => hmac('v:' + hash).slice(0, 16);
 const versaoAdmin = () => versaoSenha('admin:' + (process.env.ADMIN_USER || 'admin') + '\n' + (process.env.ADMIN_PASSWORD || 'admin'));
+const versaoSuporte = () => versaoSenha('suporte:' + SUPORTE_USER + '\n' + SUPORTE_PASSWORD);
 
 function lerSessao(req) {
   const bruto = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='));
@@ -156,7 +164,9 @@ function senhaTemporaria() {
 // fotoV: "versão" da foto (muda quando a foto é trocada). Vai no endereço da imagem para o navegador
 // não mostrar a foto antiga guardada em cache. É um resumo da referência, que nunca sai do servidor.
 const versaoFoto = ref => (ref ? crypto.createHash('sha256').update(String(ref)).digest('hex').slice(0, 10) : '');
-const publicoDesp = d => ({ ...d, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
+// Despesa gravada com o nome antigo da categoria aparece com o nome novo (e entra na mesma coluna dos resumos)
+const NOME_ANTIGO_CAT = { Transporte: 'Transp/Pedágio' };
+const publicoDesp = d => ({ ...d, categoria: NOME_ANTIGO_CAT[d.categoria] || d.categoria, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
 // Comprovantes da prestação: várias fotos, guardadas como referências separadas por "|" na coluna Fotos
 const MAX_FOTOS_PREST = 10;
 const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
@@ -210,9 +220,11 @@ const exigeColab = wrap(async (req, res, next) => {
   req.colab = c;
   next();
 });
+// req.admin = quem está no painel: o administrador (Maurício) ou o suporte (pode também mudar a categoria)
 const exigeAdmin = (req, res, next) => {
   const s = req.sessao;
-  if (s.a && s.av === versaoAdmin()) return next();
+  if (s.a === 'suporte' && temSuporte() && s.av === versaoSuporte()) { req.admin = { nome: SUPORTE_NOME, suporte: true }; return next(); }
+  if (s.a === 1 && s.av === versaoAdmin()) { req.admin = { nome: ADMIN_NOME, suporte: false }; return next(); }
   if (s.a) { sairAdmin(s); gravarSessao(res, s); }
   erro(res, 'Faça login.', 401);
 };
@@ -316,7 +328,7 @@ app.post('/api/periodos/fechar', exigeColab, wrap(async (req, res) => {
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const data = texto(req.body.data, 20); // não corta: "2026-10-20xyz" tem que ser recusada, não virar 2026-10-20
-  const categoria = texto(req.body.categoria, 30);
+  const cat = texto(req.body.categoria, 30), categoria = NOME_ANTIGO_CAT[cat] || cat; // app aberto antes da troca do nome
   const v = valor(req.body.valor);
   const observacao = texto(req.body.observacao, 200);
   if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
@@ -385,18 +397,20 @@ app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
 
 // ================= ADMINISTRADOR (Maurício) =================
 app.post('/api/admin/login', (req, res) => {
-  const chave = 'a:' + req.ip, conta = 'A:admin';
+  const usuario = texto(req.body.usuario, 100), senha = String(req.body.senha ?? '');
+  // contadores separados por usuário: erros num login não travam o outro (administrador e suporte)
+  const chave = 'a:' + req.ip + ':' + usuario.toLowerCase(), conta = 'A:' + usuario.toLowerCase();
   if (bloqueado(chave, conta)) return erro(res, 'Muitas tentativas. Aguarde 10 minutos.', 429);
-  const ok = iguais(texto(req.body.usuario, 100), process.env.ADMIN_USER || 'admin')
-    && iguais(String(req.body.senha ?? ''), process.env.ADMIN_PASSWORD || 'admin');
-  if (!ok) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
+  const admin = iguais(usuario, process.env.ADMIN_USER || 'admin') && iguais(senha, process.env.ADMIN_PASSWORD || 'admin');
+  const suporte = !admin && temSuporte() && iguais(usuario, SUPORTE_USER) && iguais(senha, SUPORTE_PASSWORD);
+  if (!admin && !suporte) { falhou(chave); falhou(conta, LIMITE_CONTA); return erro(res, 'Usuário ou senha incorretos.', 401); }
   sucesso(chave, conta);
-  Object.assign(req.sessao, { a: 1, av: versaoAdmin(), ae: Date.now() + DURACAO_MS });
+  Object.assign(req.sessao, admin ? { a: 1, av: versaoAdmin() } : { a: 'suporte', av: versaoSuporte() }, { ae: Date.now() + DURACAO_MS });
   gravarSessao(res, req.sessao);
   res.json({ ok: true });
 });
 app.post('/api/admin/logout', (req, res) => { sairAdmin(req.sessao); gravarSessao(res, req.sessao); res.json({ ok: true }); });
-app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: ADMIN_NOME }));
+app.get('/api/admin/me', exigeAdmin, (req, res) => res.json({ nome: req.admin.nome, suporte: req.admin.suporte }));
 
 // Tudo o que o painel precisa de uma vez (volume pequeno); os resumos são calculados na tela
 app.get('/api/admin/dados', exigeAdmin, wrap(async (req, res) => {
@@ -601,6 +615,21 @@ app.delete('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, re
 }));
 
 // ---- aprovação das despesas do celular ----
+// Mudar a categoria de uma despesa (ex.: o colaborador lançou um pedágio em "Outros"). Não mexe no valor, no status
+// nem no período: só em qual coluna ela soma nos resumos, no Excel e no PDF. Vale também para despesa já paga.
+app.put('/api/admin/despesas/:id/categoria', exigeAdmin, wrap(async (req, res) => {
+  if (!req.admin.suporte) return erro(res, 'Só o login de suporte pode mudar a categoria de uma despesa.', 403);
+  const categoria = texto(req.body.categoria, 30);
+  if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
+  const id = String(req.params.id);
+  const d = await store.update('Despesas', id, { categoria },
+    a => categoria !== 'Outros' || !!String(a.observacao || '').trim());
+  if (d === null) return erro(res, 'Despesa não encontrada.', 404);
+  if (d === false) return erro(res, 'Para "Outros", a despesa precisa ter uma observação.');
+  console.log(`[categoria] despesa ${id} -> ${categoria} (${req.admin.nome})`);
+  res.json(publicoDesp(d));
+}));
+
 app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   const acao = req.params.acao;
   if (!['aprovar', 'recusar', 'reabrir'].includes(acao)) return erro(res, 'Ação inválida.', 404);
@@ -624,7 +653,7 @@ app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
     return { d: await store.update('Despesas', id, {
       status,
       avaliadoEm: acao === 'reabrir' ? '' : new Date().toISOString(),
-      avaliadoPor: acao === 'reabrir' ? '' : ADMIN_NOME,
+      avaliadoPor: acao === 'reabrir' ? '' : req.admin.nome,
     }, a => pode(a) && mesmoPeriodo(a)) };
   });
   if (r.erro) return erro(res, r.erro, r.status);
@@ -642,7 +671,7 @@ const acharColab = async id => (await store.list('Colaboradores')).find(x => x.i
 app.post('/api/admin/periodos/fechar', exigeAdmin, wrap(async (req, res) => {
   const c = await acharColab(req.body.colaboradorId);
   if (!c) return erro(res, 'Escolha o colaborador.');
-  const r = await fecharPeriodo(c, ADMIN_NOME);
+  const r = await fecharPeriodo(c, req.admin.nome);
   if (r.erro) return erro(res, r.erro, r.status || 400);
   res.status(201).json(r);
 }));
@@ -660,7 +689,7 @@ app.post('/api/admin/periodos/:id/pagar', exigeAdmin, wrap(async (req, res) => {
     const aprov = notas.filter(d => d.status === STATUS.aprovada);
     if (!aprov.length) return { erro: 'Nenhuma despesa aprovada neste período. Reabra o período ou aprove as notas antes de pagar.' };
     const agora = new Date().toISOString();
-    const pago = await store.update('Periodos', id, { status: PAGO, pagoEm: agora, pagoPor: ADMIN_NOME,
+    const pago = await store.update('Periodos', id, { status: PAGO, pagoEm: agora, pagoPor: req.admin.nome,
       valorPago: r2(aprov.reduce((t, d) => t + d.valor, 0)) }, a => a.status === ENVIADO);
     return pago ? { periodo: pago } : { erro: 'Este período acabou de mudar em outra tela. A lista foi atualizada.', status: 409 };
   });
@@ -721,7 +750,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
   const c = await acharColab(req.body.colaboradorId);
   if (!c) return erro(res, 'Escolha o colaborador.');
   if (req.body.jaPagas !== true) {
-    const r = await fecharPeriodo(c, ADMIN_NOME, { antigas: true });
+    const r = await fecharPeriodo(c, req.admin.nome, { antigas: true });
     if (r.erro) return erro(res, r.erro, r.status || 400);
     return res.status(201).json(r);
   }
@@ -731,7 +760,7 @@ app.post('/api/admin/periodos/antigas', exigeAdmin, wrap(async (req, res) => {
     if (!lista.length) return { erro: 'Esse colaborador não tem despesas antigas pendentes.' };
     const datas = lista.map(d => d.data).sort(), agora = new Date().toISOString();
     const pg = { id: novoId(), colaboradorId: c.id, colaborador: c.nome, dataInicial: datas[0], dataFinal: datas[datas.length - 1], status: PAGO,
-      fechadoEm: agora, fechadoPor: ADMIN_NOME, pagoEm: agora, pagoPor: `${ADMIN_NOME} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
+      fechadoEm: agora, fechadoPor: req.admin.nome, pagoEm: agora, pagoPor: `${req.admin.nome} (${ANTES_DO_SISTEMA})`, valorPago: 0 };
     await store.add('Periodos', pg);
     let soma = 0, n = 0;
     const entraram = [];
