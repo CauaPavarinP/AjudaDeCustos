@@ -11,7 +11,7 @@ const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julh
 const MES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 const VISUAL = {
   'Combustível': ['⛽', '#fee2e2'], 'Alimentação': ['🍽️', '#e0e7ff'], 'Degustação': ['🍷', '#dcfce7'],
-  'Hotel': ['🏨', '#f3e8ff'], 'Transporte': ['🚌', '#e0f2fe'], 'Outros': ['🧾', '#fef3c7'],
+  'Hotel': ['🏨', '#f3e8ff'], 'Transp/Pedágio': ['🛣️', '#e0f2fe'], 'Outros': ['🧾', '#fef3c7'],
 };
 const icone = cat => { const [e, bg] = VISUAL[cat] || ['🧾', '#f1f5f9']; return `<span class="ic" style="background:${bg}">${e}</span>`; };
 const COR_STATUS = { [PAGA]: 'b-blue', [STATUS.aprovada]: 'b-green', [STATUS.recusada]: 'b-red' };

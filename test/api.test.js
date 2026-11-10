@@ -321,6 +321,27 @@ test('travas de exclusão: colaborador com histórico e função em uso', async 
   assert.equal((await a.del('/api/admin/colaboradores/' + livre.id)).status, 200);
 });
 
+test('categoria Transp/Pedágio e mudar a categoria de uma despesa pelo painel', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  assert.ok((await c.get('/api/categorias')).dados.some(x => x.nome === 'Transp/Pedágio' && x.chave === 'transporte'));
+  // app aberto com o nome antigo ainda funciona e grava com o nome novo
+  const antigo = (await c.post('/api/despesas', { data: ontem(), categoria: 'Transporte', valor: 12 })).dados;
+  assert.equal(antigo.categoria, 'Transp/Pedágio');
+  // pedágio lançado em "Outros", aprovado e pago: o admin muda a categoria sem mexer em valor, status ou período
+  const d = (await c.post('/api/despesas', { data: ontem(), categoria: 'Outros', valor: 7.5, observacao: 'pedágio' })).dados;
+  await a.post(`/api/admin/despesas/${d.id}/aprovar`);
+  const r = await a.put(`/api/admin/despesas/${d.id}/categoria`, { categoria: 'Transp/Pedágio' });
+  assert.equal(r.status, 200, JSON.stringify(r.dados));
+  assert.deepEqual([r.dados.categoria, r.dados.valor, r.dados.status], ['Transp/Pedágio', 7.5, 'Aprovada']);
+  assert.equal((await a.put(`/api/admin/despesas/${d.id}/categoria`, { categoria: 'Nada' })).status, 400);
+  assert.equal((await a.put('/api/admin/despesas/naoexiste/categoria', { categoria: 'Hotel' })).status, 404);
+  // "Outros" exige observação
+  assert.equal((await a.put(`/api/admin/despesas/${antigo.id}/categoria`, { categoria: 'Outros' })).status, 400);
+  // colaborador não pode mudar
+  assert.equal((await c.put(`/api/admin/despesas/${d.id}/categoria`, { categoria: 'Hotel' })).status, 401);
+});
+
 test('colaborador desativado perde o acesso na hora', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);

@@ -17,7 +17,7 @@ const CATEGORIAS = [
   { chave: 'alimentacao', nome: 'Alimentação' },
   { chave: 'degustacao', nome: 'Degustação' },
   { chave: 'hotel', nome: 'Hotel' },
-  { chave: 'transporte', nome: 'Transporte' },
+  { chave: 'transporte', nome: 'Transp/Pedágio' }, // até 10/11/2026 se chamava "Transporte" (a coluna da planilha continua Transporte)
   { chave: 'outros', nome: 'Outros' },
 ];
 const NOMES_CAT = CATEGORIAS.map(c => c.nome);
@@ -156,7 +156,9 @@ function senhaTemporaria() {
 // fotoV: "versão" da foto (muda quando a foto é trocada). Vai no endereço da imagem para o navegador
 // não mostrar a foto antiga guardada em cache. É um resumo da referência, que nunca sai do servidor.
 const versaoFoto = ref => (ref ? crypto.createHash('sha256').update(String(ref)).digest('hex').slice(0, 10) : '');
-const publicoDesp = d => ({ ...d, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
+// Despesa gravada com o nome antigo da categoria aparece com o nome novo (e entra na mesma coluna dos resumos)
+const NOME_ANTIGO_CAT = { Transporte: 'Transp/Pedágio' };
+const publicoDesp = d => ({ ...d, categoria: NOME_ANTIGO_CAT[d.categoria] || d.categoria, foto: !!d.foto, fotoV: versaoFoto(d.foto) });
 // Comprovantes da prestação: várias fotos, guardadas como referências separadas por "|" na coluna Fotos
 const MAX_FOTOS_PREST = 10;
 const refsPrest = p => String((p && p.fotos) || '').split('|').filter(Boolean);
@@ -316,7 +318,7 @@ app.post('/api/periodos/fechar', exigeColab, wrap(async (req, res) => {
 
 app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
   const data = texto(req.body.data, 20); // não corta: "2026-10-20xyz" tem que ser recusada, não virar 2026-10-20
-  const categoria = texto(req.body.categoria, 30);
+  const cat = texto(req.body.categoria, 30), categoria = NOME_ANTIGO_CAT[cat] || cat; // app aberto antes da troca do nome
   const v = valor(req.body.valor);
   const observacao = texto(req.body.observacao, 200);
   if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
@@ -601,6 +603,20 @@ app.delete('/api/admin/prestacoes/:id/fotos/:n', exigeAdmin, wrap(async (req, re
 }));
 
 // ---- aprovação das despesas do celular ----
+// Mudar a categoria de uma despesa (ex.: o colaborador lançou um pedágio em "Outros"). Não mexe no valor, no status
+// nem no período: só em qual coluna ela soma nos resumos, no Excel e no PDF. Vale também para despesa já paga.
+app.put('/api/admin/despesas/:id/categoria', exigeAdmin, wrap(async (req, res) => {
+  const categoria = texto(req.body.categoria, 30);
+  if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
+  const id = String(req.params.id);
+  const d = await store.update('Despesas', id, { categoria },
+    a => categoria !== 'Outros' || !!String(a.observacao || '').trim());
+  if (d === null) return erro(res, 'Despesa não encontrada.', 404);
+  if (d === false) return erro(res, 'Para "Outros", a despesa precisa ter uma observação.');
+  console.log(`[categoria] despesa ${id} -> ${categoria} (${ADMIN_NOME})`);
+  res.json(publicoDesp(d));
+}));
+
 app.post('/api/admin/despesas/:id/:acao', exigeAdmin, wrap(async (req, res) => {
   const acao = req.params.acao;
   if (!['aprovar', 'recusar', 'reabrir'].includes(acao)) return erro(res, 'Ação inválida.', 404);

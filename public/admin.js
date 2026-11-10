@@ -290,6 +290,10 @@ function modalNota(d, voltar, voltaDepois = false) {
         </div>
         ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
+        <div class="acts" style="justify-content:stretch;align-items:center">
+          <select class="input grow" id="m-cat" aria-label="Categoria">${CAT.map(c => `<option${c.nome === d.categoria ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select>
+          <button class="btn secondary" id="m-cat-ok">Mudar categoria</button>
+        </div>
         ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
           : perPago ? '<span class="muted small">Período já pago: para mudar esta despesa, desfaça o pagamento em Pagamentos.</span>'
           : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === STATUS.aprovada ? 'aprovação' : 'recusa'}</button>`}
@@ -318,6 +322,20 @@ function modalNota(d, voltar, voltaDepois = false) {
     try { await avaliarDespesa(d.id, acao); desenharTela(); if (voltar && voltaDepois) voltar(); else fecharModal(); }
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
+  // Mudar a categoria (ex.: pedágio lançado em "Outros"): não mexe no valor, no status nem no período
+  m.querySelector('#m-cat-ok').onclick = e => travando(e.currentTarget, async () => {
+    const categoria = m.querySelector('#m-cat').value;
+    if (categoria === d.categoria) return;
+    try {
+      await post(`/api/admin/despesas/${encodeURIComponent(d.id)}/categoria`, { categoria }, 'PUT');
+      await carregar(); desenharTela();
+      modalNota(D.despesas.find(x => x.id === d.id), voltar, voltaDepois); // mostra a nota já com a categoria nova
+    } catch (err) {
+      if (err.login) return;
+      if (err.status === 404) { await carregar().catch(() => {}); fecharModal(); desenharTela(); return avisar(MSG_EXCLUIDA, 'Despesa excluída'); }
+      avisar(err.message, 'Não foi possível mudar a categoria');
+    }
+  });
   if (emAnalise) { m.querySelector('#m-ap').onclick = decidir('aprovar'); m.querySelector('#m-rc').onclick = decidir('recusar'); }
   else if (m.querySelector('#m-desfazer')) m.querySelector('#m-desfazer').onclick = decidir('reabrir');
 }
