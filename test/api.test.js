@@ -357,6 +357,48 @@ test('categoria Transp/Pedágio e mudar a categoria de uma despesa pelo painel',
   assert.equal((await c.put(`/api/admin/despesas/${d.id}/categoria`, { categoria: 'Hotel' })).status, 401);
 });
 
+test('nota recusada: o colaborador corrige e reenvia, ou exclui', async () => {
+  const a = await adminLogado();
+  const { c } = await novoColaborador(a);
+  const { c: outro } = await novoColaborador(a);
+  const dia = n => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  // 1) recusada antes de enviar: corrige tudo e volta para "Em análise"
+  const d1 = (await c.post('/api/despesas', { data: dia(2), categoria: 'Outros', valor: 50, observacao: 'x' })).dados;
+  assert.equal((await c.put(`/api/despesas/${d1.id}/reenviar`, { data: dia(2), categoria: 'Hotel', valor: 10 })).status, 400, 'só recusada');
+  await a.post(`/api/admin/despesas/${d1.id}/recusar`);
+  assert.equal((await outro.put(`/api/despesas/${d1.id}/reenviar`, { data: dia(2), categoria: 'Hotel', valor: 10 })).status, 404, 'de outro colaborador');
+  assert.equal((await c.put(`/api/despesas/${d1.id}/reenviar`, { data: dia(2), categoria: 'Hotel', valor: 0 })).status, 400, 'mesmas validações');
+  const r1 = await c.put(`/api/despesas/${d1.id}/reenviar`, { data: dia(3), categoria: 'Transp/Pedágio', valor: 45.5, observacao: 'pedágio', foto: fotoFake() });
+  assert.equal(r1.status, 200, JSON.stringify(r1.dados));
+  assert.deepEqual([r1.dados.status, r1.dados.categoria, r1.dados.valor, r1.dados.data, r1.dados.avaliadoPor, r1.dados.foto], ['Em análise', 'Transp/Pedágio', 45.5, dia(3), '', true]);
+  // 2) recusada dentro de um período ainda não pago: continua no período e o pagamento espera a nova análise
+  const d2 = (await c.post('/api/despesas', { data: dia(1), categoria: 'Hotel', valor: 100 })).dados;
+  await a.post(`/api/admin/despesas/${d1.id}/aprovar`);
+  const per = (await c.post('/api/periodos/fechar')).dados.periodo;
+  await a.post(`/api/admin/despesas/${d2.id}/recusar`);
+  const r2 = await c.put(`/api/despesas/${d2.id}/reenviar`, { data: dia(5), categoria: 'Hotel', valor: 90 });
+  assert.equal(r2.status, 200, JSON.stringify(r2.dados));
+  const dados = (await a.get('/api/admin/dados')).dados;
+  assert.equal(dados.despesas.find(x => x.id === d2.id).periodoId, per.id, 'continua no mesmo período');
+  assert.equal(dados.periodos.find(p => p.id === per.id).dataInicial, dia(5), 'datas do período incluem a data corrigida');
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).status, 400, 'pagamento espera a nova análise');
+  await a.post(`/api/admin/despesas/${d2.id}/aprovar`);
+  assert.equal((await a.post(`/api/admin/periodos/${per.id}/pagar`)).dados.periodo.valorPago, 135.5);
+  // 3) período já pago: recusada não muda mais
+  await a.post(`/api/admin/periodos/${per.id}/desfazer-pagamento`);
+  await a.post(`/api/admin/despesas/${d2.id}/reabrir`); await a.post(`/api/admin/despesas/${d2.id}/recusar`);
+  await a.post(`/api/admin/periodos/${per.id}/pagar`);
+  assert.equal((await c.put(`/api/despesas/${d2.id}/reenviar`, { data: dia(5), categoria: 'Hotel', valor: 90 })).status, 400);
+  assert.equal((await c.del(`/api/despesas/${d2.id}`)).status, 400);
+  // 4) excluir a recusada de um período aberto; período que fica vazio sai junto
+  const d3 = (await c.post('/api/despesas', { data: dia(1), categoria: 'Hotel', valor: 20 })).dados;
+  const per2 = (await c.post('/api/periodos/fechar')).dados.periodo;
+  await a.post(`/api/admin/despesas/${d3.id}/recusar`);
+  assert.equal((await c.del(`/api/despesas/${d3.id}`)).status, 200);
+  const depois = (await a.get('/api/admin/dados')).dados;
+  assert.ok(!depois.despesas.some(x => x.id === d3.id) && !depois.periodos.some(p => p.id === per2.id));
+});
+
 test('colaborador desativado perde o acesso na hora', async () => {
   const a = await adminLogado();
   const { c, id } = await novoColaborador(a);
