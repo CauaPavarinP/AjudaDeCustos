@@ -19,6 +19,7 @@ const CORES_FUNCAO = ['b-purple', 'b-pink', 'b-blue', 'b-amber', 'b-green', 'b-g
 const { STATUS, PAGO, PAGA, naoEnviada, antesDoSistema } = Regras;
 
 let D = null;          // dados vindos do servidor
+let ME = null;         // quem está no painel: { nome, suporte } (o suporte também pode mudar a categoria)
 let CAT = [];          // categorias
 const F = {            // filtros de cada tela (ficam guardados ao trocar de tela)
   l: { ano: hoje().slice(0, 4), mes: hoje().slice(5, 7), funcao: '', colab: '', busca: '' },
@@ -290,10 +291,10 @@ function modalNota(d, voltar, voltaDepois = false) {
         </div>
         ${d.foto ? `<a class="link small" href="${url}" target="_blank" rel="noopener">Abrir a foto em nova aba ↗</a>` : ''}
         <span class="muted small">Confira se o valor e a data batem com a nota.</span>
-        <div class="acts" style="justify-content:stretch;align-items:center">
+        ${ME && ME.suporte ? `<div class="acts" style="justify-content:stretch;align-items:center">
           <select class="input grow" id="m-cat" aria-label="Categoria">${CAT.map(c => `<option${c.nome === d.categoria ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select>
           <button class="btn secondary" id="m-cat-ok">Mudar categoria</button>
-        </div>
+        </div>` : ''}
         ${emAnalise ? '<div class="acts" style="justify-content:stretch"><button class="btn ok grow" id="m-ap">Aprovar</button><button class="btn danger grow" id="m-rc">Recusar</button></div>'
           : perPago ? '<span class="muted small">Período já pago: para mudar esta despesa, desfaça o pagamento em Pagamentos.</span>'
           : `<button class="btn secondary" id="m-desfazer">↩ Desfazer ${d.status === STATUS.aprovada ? 'aprovação' : 'recusa'}</button>`}
@@ -323,7 +324,7 @@ function modalNota(d, voltar, voltaDepois = false) {
     catch (err) { avisar(err.message, 'Não foi possível concluir'); botao.disabled = false; }
   };
   // Mudar a categoria (ex.: pedágio lançado em "Outros"): não mexe no valor, no status nem no período
-  m.querySelector('#m-cat-ok').onclick = e => travando(e.currentTarget, async () => {
+  if (m.querySelector('#m-cat-ok')) m.querySelector('#m-cat-ok').onclick = e => travando(e.currentTarget, async () => {
     const categoria = m.querySelector('#m-cat').value;
     if (categoria === d.categoria) return;
     try {
@@ -1163,7 +1164,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) atua
 
 function mostrarLogin() { $('v-login').classList.remove('hidden'); $('v-painel').classList.add('hidden'); }
 async function mostrarPainel(me) {
+  ME = me;
   $('who-nome').textContent = me.nome;
+  $('who-papel').textContent = me.suporte ? 'Suporte' : 'Administrador';
   await carregar();
   $('v-login').classList.add('hidden'); $('v-painel').classList.remove('hidden');
   render();

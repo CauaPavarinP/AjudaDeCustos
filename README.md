@@ -9,7 +9,7 @@ Substitui a planilha "Resumo prestação de contas" do Comercial. O colaborador 
 | Colaborador | `/` | Entra com **usuário + senha**, lança despesas (categoria, valor, data e observação), acompanha o status (*Em análise*, *Aprovada*, *Recusada*) e troca a senha em Perfil. |
 | Maurício | `/admin` | Lança prestações de contas, aprova ou recusa as despesas do celular, vê os resumos por colaborador e por função, exporta para Excel (.xlsx), baixa backup e cadastra colaboradores e funções. |
 
-- **Categorias:** Combustível, Alimentação, Degustação, Hotel, Transp/Pedágio e Outros. Em "Outros", a observação é obrigatória. "Transp/Pedágio" se chamava "Transporte" (na planilha, a coluna da aba Prestacoes continua com o nome Transporte; não renomeie). No painel, em "Ver nota", o administrador pode **mudar a categoria** de uma despesa lançada na categoria errada (ex.: pedágio em "Outros"): o valor, o status e o período não mudam, só a coluna em que ela soma.
+- **Categorias:** Combustível, Alimentação, Degustação, Hotel, Transp/Pedágio e Outros. Em "Outros", a observação é obrigatória. "Transp/Pedágio" se chamava "Transporte" (na planilha, a coluna da aba Prestacoes continua com o nome Transporte; não renomeie). No painel, em "Ver nota", o login de **suporte** (variáveis `SUPORTE_USER`/`SUPORTE_PASSWORD`) pode **mudar a categoria** de uma despesa lançada na categoria errada (ex.: pedágio em "Outros"): o valor, o status e o período não mudam, só a coluna em que ela soma.
 - **Despesas do celular:** ficam *Em análise* até o Maurício aprovar. A tela "Despesas do celular" do painel lista todas (filtro por status: Em análise, Aprovada, Recusada) e tem **Desfazer**, que volta uma despesa aprovada ou recusada para *Em análise*. As aprovadas entram nos lançamentos e nos resumos, somadas por colaborador e mês, com a etiqueta **APP**. O colaborador só pode excluir uma despesa enquanto ela está em análise.
 - **Colaboradores:** o Maurício cadastra. A senha inicial é gerada automaticamente e aparece **uma única vez**. Se o colaborador esquecer a senha, o Maurício gera uma nova em "Nova senha". Quem é desativado não entra mais, mas o histórico continua nos resumos. **Excluir** só é permitido para quem ainda não tem nenhum lançamento (cadastro feito por engano); quem tem histórico deve ser desativado.
 - **Funções:** cadastradas e excluídas na tela Colaboradores (o × ao lado do nome). Só dá para excluir uma função que nenhum colaborador usa; os lançamentos antigos guardam o nome da função, então os resumos não mudam.
@@ -62,6 +62,8 @@ Veja `.env.example`. No Render, cadastre em **Environment → Environment Variab
 | `NODE_ENV` | `production` |
 | `SESSION_SECRET` | texto longo e aleatório |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | login do painel `/admin` |
+| `SUPORTE_USER` / `SUPORTE_PASSWORD` | opcional; login de suporte no painel `/admin`: faz tudo o que o administrador faz e também pode **mudar a categoria** de uma despesa (o administrador não pode). Use um usuário diferente do `ADMIN_USER` e senha com 10 caracteres ou mais |
+| `SUPORTE_NOME` | opcional; nome do login de suporte em "aprovada por", "pago por"... (padrão: Suporte) |
 | `ADMIN_NOME` | opcional; nome exibido no painel e em "aprovada por" (padrão: Maurício) |
 | `SPREADSHEET_ID` | ID da planilha (trecho da URL entre `/d/` e `/edit`) |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | e-mail da Service Account |
