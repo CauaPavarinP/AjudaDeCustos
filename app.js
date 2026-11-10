@@ -326,21 +326,28 @@ app.post('/api/periodos/fechar', exigeColab, wrap(async (req, res) => {
   res.status(201).json(r);
 }));
 
-app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
-  const data = texto(req.body.data, 20); // não corta: "2026-10-20xyz" tem que ser recusada, não virar 2026-10-20
-  const cat = texto(req.body.categoria, 30), categoria = NOME_ANTIGO_CAT[cat] || cat; // app aberto antes da troca do nome
-  const v = valor(req.body.valor);
-  const observacao = texto(req.body.observacao, 200);
-  if (!NOMES_CAT.includes(categoria)) return erro(res, 'Escolha a categoria.');
-  if (!(v > 0)) return erro(res, 'Informe o valor da nota.');
-  if (v > VALOR_MAXIMO) return erro(res, `Valor muito alto (limite de ${valorMaximoTxt()}). Confira o que foi digitado.`);
+// Campos de uma despesa digitados pelo colaborador (lançar e corrigir): devolve os campos limpos ou { erro }
+function validarDespesa(body) {
+  const data = texto(body.data, 20); // não corta: "2026-10-20xyz" tem que ser recusada, não virar 2026-10-20
+  const cat = texto(body.categoria, 30), categoria = NOME_ANTIGO_CAT[cat] || cat; // app aberto antes da troca do nome
+  const v = valor(body.valor);
+  const observacao = texto(body.observacao, 200);
+  if (!NOMES_CAT.includes(categoria)) return { erro: 'Escolha a categoria.' };
+  if (!(v > 0)) return { erro: 'Informe o valor da nota.' };
+  if (v > VALOR_MAXIMO) return { erro: `Valor muito alto (limite de ${valorMaximoTxt()}). Confira o que foi digitado.` };
   const problema = problemaData(data, 'A data');
-  if (problema) return erro(res, problema);
-  if (data > hojeSP()) return erro(res, 'A data não pode ser no futuro.');
-  if (categoria === 'Outros' && !observacao) return erro(res, 'Para "Outros", escreva uma observação.');
+  if (problema) return { erro: problema };
+  if (data > hojeSP()) return { erro: 'A data não pode ser no futuro.' };
+  if (categoria === 'Outros' && !observacao) return { erro: 'Para "Outros", escreva uma observação.' };
+  return { data, categoria, valor: v, observacao };
+}
+
+app.post('/api/despesas', exigeColab, wrap(async (req, res) => {
+  const v = validarDespesa(req.body);
+  if (v.erro) return erro(res, v.erro);
   const d = {
     id: novoId(), colaboradorId: req.colab.id, colaborador: req.colab.nome, funcao: req.colab.funcao,
-    data, categoria, valor: v, observacao, status: STATUS.analise,
+    ...v, status: STATUS.analise,
     criadoEm: new Date().toISOString(), avaliadoEm: '', avaliadoPor: '', foto: '',
   };
   if (req.body.foto) {
@@ -383,16 +390,69 @@ app.put('/api/despesas/:id/foto', exigeColab, wrap(async (req, res) => {
   res.json(publicoDesp(atual));
 }));
 
+// Excluir: a despesa em análise que ainda não foi enviada, ou a recusada (mesmo dentro de um período ainda não pago;
+// recusada não entra no pagamento). Se o período ficar sem nenhuma despesa, ele sai junto.
 app.delete('/api/despesas/:id', exigeColab, wrap(async (req, res) => {
   const d = await minhaDespesa(req, true);
   if (!d) return erro(res, 'Despesa não encontrada.', 404);
-  if (d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas que ainda estão em análise.');
-  if (!naoEnviada(d)) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser excluída.');
-  const r = await store.remove('Despesas', d.id, a => a.status === STATUS.analise && naoEnviada(a)); // confere de novo na hora de apagar
-  if (r === 'conflito') return erro(res, 'Esta despesa acabou de ser avaliada ou enviada num período e não pode mais ser excluída.', 409);
+  const recusada = d.status === STATUS.recusada;
+  if (!recusada && d.status !== STATUS.analise) return erro(res, 'Só dá para excluir despesas em análise ou recusadas.');
+  if (!recusada && !naoEnviada(d)) return erro(res, 'Esta despesa já foi enviada num período e não pode mais ser excluída.');
+  if (recusada && await periodoPago(d)) return erro(res, MSG_RECUSADA_PAGA);
+  const mesmo = a => a.status === d.status && (a.periodoId || '') === (d.periodoId || '') && (recusada || naoEnviada(a));
+  const r = await comTrava(chaveDespesa(d), async () => {
+    const apagada = await store.remove('Despesas', d.id, mesmo); // confere de novo na hora de apagar
+    if (apagada && apagada !== 'conflito' && !naoEnviada(d)) await tirarPeriodoVazio(d.periodoId);
+    return apagada;
+  });
+  if (r === 'conflito') return erro(res, 'Esta despesa acabou de mudar em outra tela e não pode mais ser excluída. Atualize a lista.', 409);
   if (r && r.foto !== d.foto) apagarFoto(r.foto); // a foto foi trocada durante a exclusão: apaga a que estava na linha
   apagarFoto(d.foto);
   res.json({ ok: true });
+}));
+
+// Corrigir e reenviar uma despesa recusada: o colaborador acerta categoria, valor, data, observação e foto, e ela
+// volta para "Em análise". Se estava num período ainda não pago, continua nele (o pagamento espera a nova análise)
+// e as datas do período passam a incluir a data corrigida. Num período já pago, não muda mais.
+const MSG_RECUSADA_PAGA = 'Esta despesa está num período já pago e não pode mais ser alterada. Lance uma despesa nova.';
+const periodoPago = async d => !naoEnviada(d) && ((await acharPeriodo(d.periodoId)) || {}).status === PAGO;
+async function ajustarDatasPeriodo(periodoId) {
+  const datas = (await store.list('Despesas', { fresco: true })).filter(x => x.periodoId === periodoId).map(x => x.data).sort();
+  if (datas.length) await store.update('Periodos', periodoId, { dataInicial: datas[0], dataFinal: datas[datas.length - 1] }, p => p.status === ENVIADO);
+}
+async function tirarPeriodoVazio(periodoId) {
+  const resta = (await store.list('Despesas', { fresco: true })).some(x => x.periodoId === periodoId);
+  if (resta) return ajustarDatasPeriodo(periodoId);
+  await store.remove('Periodos', periodoId, p => p.status === ENVIADO);
+}
+app.put('/api/despesas/:id/reenviar', exigeColab, wrap(async (req, res) => {
+  const d = await minhaDespesa(req, true);
+  if (!d) return erro(res, 'Despesa não encontrada.', 404);
+  if (d.status !== STATUS.recusada) return erro(res, 'Só dá para corrigir e reenviar uma despesa recusada.');
+  const v = validarDespesa(req.body);
+  if (v.erro) return erro(res, v.erro);
+  if (await periodoPago(d)) return erro(res, MSG_RECUSADA_PAGA);
+  let fotoNova = '';
+  if (req.body.foto) {
+    const f = await guardarFoto(d.id, req.body.foto);
+    if (f.erro) return erro(res, f.erro);
+    fotoNova = f.ref;
+  }
+  const tirarFoto = !fotoNova && req.body.removerFoto === true;
+  const campos = { ...v, status: STATUS.analise, avaliadoEm: '', avaliadoPor: '', ...(fotoNova ? { foto: fotoNova } : tirarFoto ? { foto: '' } : {}) };
+  const mesmo = a => a.status === STATUS.recusada && (a.periodoId || '') === (d.periodoId || '');
+  // Trava da despesa (colaborador ou período): não cruza com um pagamento, um fechamento ou uma reabertura
+  const r = await comTrava(chaveDespesa(d), async () => {
+    if (await periodoPago(d)) return { erro: MSG_RECUSADA_PAGA, status: 400 };
+    const nova = await store.update('Despesas', d.id, campos, mesmo);
+    if (nova === null) return { erro: 'Despesa não encontrada.', status: 404 };
+    if (nova === false) return { erro: 'Esta despesa acabou de mudar em outra tela. Atualize a lista.', status: 409 };
+    if (!naoEnviada(nova)) await ajustarDatasPeriodo(nova.periodoId);
+    return { d: nova };
+  }).catch(e => { apagarFoto(fotoNova); throw e; });
+  if (r.erro) { apagarFoto(fotoNova); return erro(res, r.erro, r.status); }
+  if (fotoNova || tirarFoto) apagarFoto(d.foto); // a foto antiga
+  res.json(publicoDesp(r.d));
 }));
 
 // ================= ADMINISTRADOR (Maurício) =================

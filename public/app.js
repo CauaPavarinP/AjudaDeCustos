@@ -184,12 +184,14 @@ async function telaInicio(recebidas) {
 }
 
 // ---------- C3 · Nova despesa ----------
-function telaNova(r = null) {
+// corrigir: despesa recusada que o colaborador corrige e reenvia para análise (mesmo formulário, já preenchido)
+function telaNova(r = null, corrigir = null) {
   telaAtual = 'nova';
   if (!r || !r.usuario) r = null; // só um rascunho de verdade (nunca o evento de clique de um botão)
-  let cat = '', centavos = 0, foto = r ? r.foto : '';
+  let cat = '', centavos = 0, foto = r ? r.foto : '', fotoMudou = false;
   mostrar(`
-    <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Nova despesa</h2></div>
+    <div class="m-title"><button class="iconbtn" id="n-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>${corrigir ? 'Corrigir despesa' : 'Nova despesa'}</h2></div>
+    ${corrigir ? `<div class="okline red">Recusada por ${esc(corrigir.avaliadoPor)}. Corrija o que for preciso e reenvie para análise.</div>` : ''}
     ${fotosLigadas ? '<div class="foto-box" id="n-foto"></div>' : '<div class="photo"><span style="font-size:28px">📷</span><span>Foto da nota</span><span class="pill">Indisponível no momento</span></div>'}
     <div class="field"><label>Categoria</label><div class="chips" id="n-cats">${categorias.map(c => `<button type="button" class="chip" data-cat="${esc(c.nome)}">${esc(c.nome)}</button>`).join('')}</div></div>
     <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -199,9 +201,9 @@ function telaNova(r = null) {
     <div class="field"><label for="n-obs" id="n-obs-l">Observação</label><input class="input" id="n-obs" maxlength="200" placeholder="Ex.: Lavação do veículo"></div>
     <span class="tip">Dica: guarde a nota. O valor precisa ser igual ao da nota.</span>
     <div id="n-erro" class="alert hidden"></div>
-    <button class="btn lg block" id="n-enviar">Enviar despesa</button>`, 'nova');
-  $('n-voltar').onclick = telaInicio;
-  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; }, 'n-erro', foto);
+    <button class="btn lg block" id="n-enviar">${corrigir ? 'Reenviar para análise' : 'Enviar despesa'}</button>`, 'nova');
+  $('n-voltar').onclick = corrigir ? () => telaDetalhe(corrigir) : telaInicio;
+  if (fotosLigadas) seletorFoto($('n-foto'), f => { foto = f; fotoMudou = true; }, 'n-erro', corrigir && corrigir.foto ? urlFoto(corrigir) : foto);
   document.querySelectorAll('#n-cats .chip').forEach(b => b.onclick = () => {
     cat = b.dataset.cat;
     document.querySelectorAll('#n-cats .chip').forEach(x => x.classList.toggle('on', x === b));
@@ -238,13 +240,31 @@ function telaNova(r = null) {
     mudaValor(r.centavos); $('n-data').value = r.data; $('n-obs').value = r.observacao;
     erro('n-erro', 'Sua sessão tinha expirado. Confira os dados e toque em "Enviar despesa".');
   }
+  if (corrigir) { // começa com o que foi lançado
+    const chipCat = [...document.querySelectorAll('#n-cats .chip')].find(x => x.dataset.cat === corrigir.categoria);
+    if (chipCat) chipCat.click();
+    mudaValor(Math.round(corrigir.valor * 100)); $('n-data').value = corrigir.data; $('n-obs').value = corrigir.observacao || '';
+  }
   $('n-enviar').onclick = async () => {
     erro('n-erro', '');
     if (!cat) return erro('n-erro', 'Escolha a categoria.');
     if (!centavos) return erro('n-erro', 'Informe o valor da nota.');
-    const b = $('n-enviar'); b.disabled = true; b.textContent = foto ? 'Enviando foto...' : 'Enviando...';
+    const b = $('n-enviar'); b.disabled = true; b.textContent = foto && (!corrigir || fotoMudou) ? 'Enviando foto...' : 'Enviando...';
     const dados = { categoria: cat, valor: centavos / 100, data: $('n-data').value, observacao: $('n-obs').value, foto };
     const usuario = me.usuario;
+    if (corrigir) {
+      // foto: só manda se trocou (nova) ou se tirou ("Remover"); senão continua a que já estava
+      const corpo = { ...dados, foto: fotoMudou && foto ? foto : undefined, removerFoto: fotoMudou && !foto };
+      try {
+        await api('/api/despesas/' + encodeURIComponent(corrigir.id) + '/reenviar', { method: 'PUT', body: JSON.stringify(corpo) });
+        await telaInicio();
+        avisar('A despesa foi corrigida e voltou para análise.', 'Reenviada');
+      } catch (err) {
+        if (err.login) return;
+        erro('n-erro', err.message); b.disabled = false; b.textContent = 'Reenviar para análise';
+      }
+      return;
+    }
     try {
       ultima = await post('/api/despesas', dados);
       telaEnviada();
@@ -324,7 +344,7 @@ function telaDetalhe(d) {
   const quando = iso => { if (!iso) return ''; const x = new Date(iso); return x.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) + ' · ' + x.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }); };
   const dataAval = d.avaliadoEm ? new Date(d.avaliadoEm).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
   const linha = d.status === STATUS.aprovada ? `<div class="okline">✓ Aprovada por ${esc(d.avaliadoPor)} em ${dataAval}</div>`
-    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}. Fale com ele se tiver dúvida.</div>`
+    : d.status === STATUS.recusada ? `<div class="okline red">Recusada por ${esc(d.avaliadoPor)} em ${dataAval}.${!d.periodo || d.periodo.status !== PAGO ? ' Você pode corrigir e reenviar, ou excluir.' : ''} Fale com quem avaliou se tiver dúvida.</div>`
     : '<div class="okline amber">Aguardando aprovação do Maurício.</div>';
   const linhaPer = !d.periodo ? (d.status !== STATUS.recusada ? '<div class="okline gray">Ainda não enviada para pagamento. Use "Fechar período e enviar" na tela inicial.</div>' : '')
     : d.periodo.status === ANTERIOR ? '<div class="okline gray">Aprovada antes do controle de pagamentos pelo app.</div>'
@@ -332,6 +352,8 @@ function telaDetalhe(d) {
     : `<div class="okline gray">Enviada no período ${faixa(d.periodo.dataInicial, d.periodo.dataFinal)}${d.status === STATUS.aprovada ? ' · aguardando pagamento' : ''}</div>`;
   // depois de avaliada pelo Maurício ou enviada num período, não muda mais
   const editavel = d.status === STATUS.analise && !d.periodo;
+  // recusada: o colaborador corrige e reenvia, ou exclui (menos se o período dela já foi pago)
+  const corrigivel = d.status === STATUS.recusada && (!d.periodo || d.periodo.status !== PAGO);
   mostrar(`
     <div class="m-title"><button class="iconbtn" id="d-voltar" aria-label="Voltar"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><h2>Detalhe da despesa</h2></div>
     ${d.foto
@@ -353,8 +375,10 @@ function telaDetalhe(d) {
     <div id="d-erro-foto" class="alert hidden"></div>
     ${linha}
     ${linhaPer}
-    ${editavel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
+    ${corrigivel ? '<button class="btn lg block" id="d-corrigir">✏️ Corrigir e reenviar</button>' : ''}
+    ${editavel || corrigivel ? '<div id="d-erro" class="alert hidden"></div><button class="btn lg block danger" id="d-excluir">Excluir despesa</button>' : ''}`, 'inicio');
   $('d-voltar').onclick = telaInicio;
+  if ($('d-corrigir')) $('d-corrigir').onclick = () => telaNova(null, d);
   if ($('d-trocar')) $('d-trocar').onclick = () => { $('d-trocar').classList.add('hidden'); $('d-foto').classList.remove('hidden'); };
   if ($('d-foto')) seletorFoto($('d-foto'), async f => {
     if (!f) return;
